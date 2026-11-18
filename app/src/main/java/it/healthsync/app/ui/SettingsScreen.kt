@@ -54,6 +54,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import it.healthsync.app.data.SyncStatus
 import it.healthsync.app.domain.HistoryRange
+import it.healthsync.app.domain.calorieOnlySourceHint
 import it.healthsync.app.health.HealthPermissions
 import java.time.Instant
 import java.time.ZoneId
@@ -65,7 +66,8 @@ fun SettingsScreen(viewModel: SettingsViewModel) {
     val context = LocalContext.current
     val snackbarHostState = remember { SnackbarHostState() }
     val sync by viewModel.syncState.collectAsStateWithLifecycle()
-    val backfill by viewModel.backfill.collectAsStateWithLifecycle()
+    val plan by viewModel.plan.collectAsStateWithLifecycle()
+    val counts by viewModel.counts.collectAsStateWithLifecycle()
     val health = viewModel.health.value
     val validation = viewModel.validation.value
     val syncing = viewModel.syncing.value
@@ -277,6 +279,24 @@ fun SettingsScreen(viewModel: SettingsViewModel) {
                     TextButton(onClick = { revealKey = !revealKey }) {
                         Text(if (revealKey) "Nascondi chiave" else "Mostra chiave")
                     }
+                    OutlinedTextField(
+                        value = viewModel.startDate.value,
+                        onValueChange = { viewModel.startDate.value = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("Inizio storico (yyyy-MM-dd)") },
+                        placeholder = { Text("Vuoto: primo giorno con dati reali") },
+                        singleLine = true,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = viewModel.gapSeconds.value,
+                        onValueChange = { viewModel.gapSeconds.value = it.filter { ch -> ch.isDigit() } },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("Pausa tra invii (secondi, minimo 60)") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    )
+                    Spacer(Modifier.height(8.dp))
                     Button(onClick = viewModel::save, modifier = Modifier.fillMaxWidth()) {
                         Text("Salva impostazioni")
                     }
@@ -293,16 +313,36 @@ fun SettingsScreen(viewModel: SettingsViewModel) {
                         Spacer(Modifier.height(6.dp))
                         Text(message, style = MaterialTheme.typography.bodyMedium)
                     }
-                    backfill?.let { plan ->
+                    plan?.let { current ->
                         Spacer(Modifier.height(6.dp))
+                        val cursor = java.time.Instant.ofEpochMilli(current.cursorEpochMs)
+                            .atZone(zone)
+                            .toLocalDate()
                         Text(
-                            if (plan.finished) {
-                                "Storico completo importato (${plan.completed} blocchi)."
+                            if (current.finished) {
+                                "Coda completata. Invii riusciti: ${current.sent}."
+                            } else if (current.phase == "scan") {
+                                "Cerco il primo giorno con dati diversi dalle calorie…"
                             } else {
-                                "Importazione storica: ${plan.completed} di ${plan.total} blocchi inviati."
+                                "Invii riusciti: ${current.sent}. Cursore: $cursor."
                             },
                             style = MaterialTheme.typography.bodyMedium,
                         )
+                    }
+                    if (counts.isNotEmpty()) {
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            "Ultima lettura — passi: ${counts["steps"] ?: 0}, sonno: ${counts["sleep"] ?: 0}, peso: ${counts["weight"] ?: 0}, allenamenti: ${counts["exercise"] ?: 0}, giorni con calorie: ${counts["calories"] ?: 0}.",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                        if (calorieOnlySourceHint(counts)) {
+                            Spacer(Modifier.height(6.dp))
+                            Text(
+                                "Health Connect ha restituito solo calorie. Apri Health Connect → Autorizzazioni app → Samsung Health e attiva la scrittura per passi, sonno, peso e allenamenti. Poi tocca Reimporta storico.",
+                                color = MaterialTheme.colorScheme.error,
+                                style = MaterialTheme.typography.bodyMedium,
+                            )
+                        }
                     }
                     Spacer(Modifier.height(10.dp))
                     Button(
@@ -323,13 +363,13 @@ fun SettingsScreen(viewModel: SettingsViewModel) {
                     }
                     Spacer(Modifier.height(8.dp))
                     OutlinedButton(
-                        onClick = viewModel::importHistory,
+                        onClick = viewModel::reimport,
                         enabled = !syncing,
                         modifier = Modifier.fillMaxWidth(),
-                    ) { Text("Importa storico completo") }
+                    ) { Text("Reimporta storico") }
                     Spacer(Modifier.height(8.dp))
                     Text(
-                        "La prima sincronizzazione importa tutto lo storico disponibile, a blocchi mensili. Poi, ogni giorno intorno alle 6:00 ($zone), partono solo i dati nuovi. Senza il permesso di lettura dello storico il limite è ${HistoryRange.FALLBACK_DAYS} giorni prima della prima concessione. Android può ritardare il lavoro se il risparmio energetico è attivo.",
+                        "Gli invii sono uno alla volta, con almeno 60 secondi di pausa, e restano sotto i 3500 byte. La prima sincronizzazione importa lo storico dal primo giorno che non contiene solo calorie. I giorni con sole calorie stimate non vengono inviati. Senza il permesso di lettura dello storico il limite è ${HistoryRange.FALLBACK_DAYS} giorni prima della prima concessione. Il lavoro continua in background.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )

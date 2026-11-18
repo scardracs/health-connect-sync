@@ -141,6 +141,8 @@ data class HealthSnapshot(
     val bloodGlucose: List<GlucoseInput> = emptyList(),
     val vo2Max: List<Vo2Input> = emptyList(),
     val unavailableMetrics: List<String> = emptyList(),
+    /** Record counts from the last read. Keys: steps, sleep, weight, exercise, calories, heart_rate. */
+    val counts: Map<String, Int> = emptyMap(),
 )
 
 @Serializable

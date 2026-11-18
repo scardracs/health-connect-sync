@@ -13,7 +13,7 @@ The in-app UI is Italian. This README, the code comments, and the release notes 
 
 ## Install on a phone
 
-The sideload APK is signed (see below) and is named `salute-sync-1.0.0.apk`.
+The sideload APK is signed (see below). Version 1.2.0 is `salute-sync-1.2.0.apk`.
 
 1. Copy the APK to the phone (Drive, email, cable, or download it in the browser).
 2. Open it. If Android blocks the install, allow **Install unknown apps** for the app you are opening it from (Chrome, Files, Gmail, and so on). On Android 8 and later this permission is per app, not a global switch: Settings → Apps → the app used to open the file → Install unknown apps.
@@ -34,11 +34,15 @@ To update the app, install a newer APK signed with the same key over this one. U
 
 - `Content-Type: application/json; charset=utf-8`
 - The header name and value you configured (default name `Authorization`)
-- `User-Agent: SaluteSync/1.1.0`
+- `User-Agent: SaluteSync/1.2.0`
 
-The first sync, and the **Importa storico completo** button, import every readable record from the earliest available instant to now. With the history permission that start is 15 years ago. Without it, Health Connect only allows data from 30 days before the app was first granted read permission, and the screen says so in Italian. Later daily syncs start at the end of the last successful import. The range is `[start, end)`: a record that falls exactly on the end is included in the next sync, so it is neither duplicated nor dropped.
+Every POST body is at most **3,500 bytes**. Requests are sent **one at a time**, with at least **60 seconds** between them (the pause can be raised in the app, not lowered). WorkManager keeps the queue going in the background. Progress is stored on the phone, so a failure resumes at the next unsent day.
 
-History is posted as monthly chunks (`kind` is `backfill`). Each chunk carries `chunk.index`, `chunk.total`, and the chunk `start` / `end`. Progress is stored on the phone, so a failed chunk is retried without resending the ones that already succeeded. A chunk larger than about 1.5 MB is split into weeks, then days, before it is sent. Empty months are still posted so the index stays contiguous. After the import finishes, the daily job sends `kind` `incremental`.
+The first sync imports history. By default it starts at the earliest day that has something other than calorie estimates, and it does not POST days that contain only calories. You can set an explicit start date (`yyyy-MM-dd`). **Reimporta storico** clears the cursor and starts again. Later mornings send only the new days (`k` is `i` instead of `b`).
+
+With the history permission the search can go back 15 years. Without it, Health Connect only allows data from 30 days before the first read grant, and the Italian screen says so.
+
+Steps, sleep, weight, and workouts are requested and read. The screen shows the record counts from the last read. If those four are zero while calories are present, Samsung Health is probably not writing them: Health Connect → App permissions → Samsung Health → allow write for steps, sleep, weight, and exercise.
 
 Daily totals (steps, distance, calories, heart rate, resting heart rate, hydration) come from Health Connect aggregation, and only for the slice of the day inside the window. Steps written by more than one source are not added twice. Heart-rate variability, oxygen, and nutrition are computed from the samples that were read. Sleep, weight, body fat, and workouts stay as individual events.
 
@@ -48,126 +52,48 @@ If Health Connect rejects a window that starts more than 30 days before the perm
 
 On a network error, or HTTP 408, 429, or 5xx, WorkManager retries with exponential backoff (minimum 15 minutes, up to 5 attempts in that cycle). A wrong URL or key (other 4xx) is not retried in a tight loop. The periodic sync stays scheduled either way.
 
-## JSON schema (version 2)
+## JSON schema (version 3)
 
-Null fields are omitted. Decimal numbers are rounded to 2 digits. Instants are ISO-8601 with the phone time-zone offset. `unavailableMetrics` lists ids that were not granted, in alphabetical order. `kind` is `incremental` or `backfill`. `chunk` is present only for `backfill`.
+Null fields are omitted. Numbers are integers except weights, temperatures, glucose, respiratory rate, and VO2, which keep one or two decimals. Each body is UTF-8 and at most 3500 bytes. `k` is `b` for history and `i` for the daily sync. `i` is the 1-based number of this POST in the current run.
 
 ```json
-{
-  "schemaVersion": 2,
-  "kind": "incremental",
-  "syncedAt": "2026-01-17T06:00:00+01:00",
-  "timezone": "Europe/Rome",
-  "appVersion": "1.0.0",
-  "historyLimited": false,
-  "window": {
-    "start": "2026-01-16T06:00:00+01:00",
-    "end": "2026-01-17T06:00:00+01:00"
-  },
-  "days": [
-    {
-      "date": "2026-01-16",
-      "steps": 8432,
-      "distanceMeters": 6120.5,
-      "activeCaloriesKcal": 320.4,
-      "totalCaloriesKcal": 2100.0,
-      "heartRate": { "min": 52, "avg": 72, "max": 145, "sampleCount": 120 },
-      "restingHeartRateBpm": 58,
-      "heartRateVariabilityRmssdMillis": { "min": 20.0, "avg": 42.5, "max": 65.0, "sampleCount": 2 },
-      "oxygenSaturationPercent": { "min": 97.0, "avg": 98.0, "max": 99.0, "sampleCount": 2 },
-      "nutrition": {
-        "energyKcal": 500.0,
-        "proteinGrams": 30.0,
-        "carbohydrateGrams": 40.0,
-        "fatGrams": 10.0,
-        "mealCount": 2
-      },
-      "hydrationMilliliters": 1800.0
-    }
-  ],
-  "sleepSessions": [
-    {
-      "start": "2026-01-16T23:00:00+01:00",
-      "end": "2026-01-17T07:00:00+01:00",
-      "durationMinutes": 480,
-      "notes": "casa",
-      "stages": [
-        {
-          "stage": "deep",
-          "start": "2026-01-16T23:30:00+01:00",
-          "end": "2026-01-17T01:00:00+01:00",
-          "durationMinutes": 90
-        },
-        {
-          "stage": "rem",
-          "start": "2026-01-17T05:00:00+01:00",
-          "end": "2026-01-17T06:00:00+01:00",
-          "durationMinutes": 60
-        }
-      ]
-    }
-  ],
-  "weightReadings": [
-    { "time": "2026-01-16T08:00:00+01:00", "weightKg": 74.2 }
-  ],
-  "bodyFatReadings": [
-    { "time": "2026-01-16T08:00:00+01:00", "percentage": 18.5 }
-  ],
-  "exerciseSessions": [
-    {
-      "start": "2026-01-16T18:00:00+01:00",
-      "end": "2026-01-16T18:45:00+01:00",
-      "durationMinutes": 45,
-      "exerciseType": "running",
-      "title": "Parco",
-      "activeCaloriesKcal": 420.0,
-      "distanceMeters": 7000.0
-    }
-  ],
-  "unavailableMetrics": []
-}
+{"v":3,"k":"b","i":1,"z":"Europe/Rome","app":"1.2.0","t":"2026-11-18T16:00:00+01:00","a":"2024-06-01","b":"2024-06-01","d":[{"d":"2024-06-01","st":8432,"dm":6120,"ak":320,"tk":2100,"hr":[52,72,145],"rh":58,"sl":[{"m":480,"s":"06-01 23:00","e":"06-02 07:00","g":{"d":90,"l":220,"r":80}}],"wt":74.2,"bf":18.5,"ex":[{"y":"run","m":45,"k":420}]}]}
 ```
 
-### Fields
-
-| Field | Meaning |
+| Key | Meaning |
 | --- | --- |
-| `schemaVersion` | `2` in this app. |
-| `kind` | `incremental` for the daily sync, `backfill` for a history chunk. |
-| `chunk` | For `backfill`: `index` (1-based), `total`, `start`, `end`. The end matches `window.end`. |
-| `syncedAt` | Instant when the app built the JSON. |
-| `timezone` | The phone's `ZoneId`, for example `Europe/Rome`. |
-| `appVersion` | The app `versionName`. |
-| `historyLimited` | `true` when the window was shortened to Health Connect's 30-day limit. |
-| `window.start` / `window.end` | Range that was read. The end is exclusive. |
-| `days[]` | One object per local day that has at least one value. Empty days are omitted. `steps: 0` is kept, because zero is a real total. |
-| `heartRate` | Minimum, average, and maximum bpm, plus the sample count, from the Health Connect aggregate. |
-| `restingHeartRateBpm` | Average of that day's resting readings (`BPM_AVG`). |
-| `heartRateVariabilityRmssdMillis` | Min / average / max RMSSD, in milliseconds. |
-| `oxygenSaturationPercent` | Min / average / max saturation, as a percentage (not a fraction). |
-| `nutrition` | Sum of energy, protein, carbohydrate, and fat for meals that started that day. `mealCount` also counts meals that omit those fields. |
-| `hydrationMilliliters` | Total volume in the part of the day inside the window. |
-| `floorsClimbed` | Floors climbed in that slice of the day. |
-| `elevationMeters` | Elevation gained, in meters. |
-| `wheelchairPushes` | Wheelchair push count. |
-| `speedMetersPerSecond` | Min / average / max speed. `sampleCount` is `0` because the aggregate does not report a count. |
-| `powerWatts` | Min / average / max power, in watts. `sampleCount` is `0`. |
-| `cyclingCadenceRpm` | Min / average / max pedaling cadence. Read with the exercise permission. |
-| `stepsCadencePerMinute` | Min / average / max step cadence. Read with the steps permission. |
-| `basalCaloriesKcal` | Basal calories burned that day. |
-| `heightReadings` | `{ time, value }` in meters. |
-| `leanBodyMassReadings`, `boneMassReadings`, `bodyWaterMassReadings` | `{ time, value }` in kilograms. |
-| `respiratoryRateReadings` | Breaths per minute. |
-| `basalMetabolicRateReadings` | Kilocalories per day at the sample time. |
-| `bodyTemperatureReadings`, `basalBodyTemperatureReadings` | `{ time, celsius, location }`. `location` is `armpit`, `finger`, `forehead`, `mouth`, `rectum`, `temporal_artery`, `toe`, `ear`, `wrist`, `vagina`, or `unknown`. |
-| `bloodPressureReadings` | `{ time, systolicMmHg, diastolicMmHg, bodyPosition, measurementLocation }`. Position: `standing`, `sitting`, `lying`, `reclining`, `unknown`. Location: `left_wrist`, `right_wrist`, `left_upper_arm`, `right_upper_arm`, `unknown`. |
-| `bloodGlucoseReadings` | `{ time, millimolesPerLiter, specimenSource, relationToMeal }`. |
-| `vo2MaxReadings` | `{ time, millilitersPerMinutePerKg, method }` where method is `metabolic_cart`, `heart_rate_ratio`, `cooper_test`, `multistage_fitness_test`, `rockport_fitness_test`, or `other`. |
-| `sleepSessions[].stages[].stage` | `awake`, `sleeping`, `out_of_bed`, `light`, `deep`, `rem`, `awake_in_bed`, `unknown`. |
-| `exerciseSessions[].exerciseType` | Health Connect exercise type in snake_case. See the list below. A future unmapped code becomes `exercise_<number>`. |
-| `unavailableMetrics` | Ids that were not read because permission was missing: `steps`, `distance`, `floors`, `elevation`, `speed`, `power`, `active_calories`, `total_calories`, `basal_metabolic_rate`, `exercise_session`, `wheelchair_pushes`, `sleep_session`, `weight`, `body_fat`, `height`, `lean_body_mass`, `bone_mass`, `body_water_mass`, `heart_rate`, `resting_heart_rate`, `heart_rate_variability`, `oxygen_saturation`, `blood_pressure`, `blood_glucose`, `body_temperature`, `basal_body_temperature`, `respiratory_rate`, `vo2_max`, `nutrition`, `hydration`. |
+| `v` | Schema version, `3`. |
+| `k` | `b` backfill, `i` incremental. |
+| `i` | 1-based POST index in this run. |
+| `z` | Phone time zone id. |
+| `app` | App version name. |
+| `t` | When this body was built. |
+| `a`, `b` | First and last local dates in `d`. |
+| `d[].d` | Local date. |
+| `st` | Steps. Omitted when zero or missing. |
+| `dm` | Distance, meters. |
+| `ak`, `tk`, `bk` | Active, total, and basal kilocalories. |
+| `hr` | `[min, avg, max]` bpm. |
+| `rh` | Resting heart rate. |
+| `hv` | HRV RMSSD milliseconds, `[min, avg, max]`. |
+| `o2` | Oxygen saturation percent, `[min, avg, max]`. |
+| `sl` | Sleep sessions: `m` minutes, `s`/`e` local `MM-dd HH:mm`, `g` stage minutes (`d` deep, `l` light, `r` REM, `a` awake, `s` sleeping, `o` out of bed, `i` awake in bed, `u` unknown). |
+| `wt` | Last weight, kg. |
+| `bf` | Last body-fat percent. |
+| `ex` | Workouts: `y` short type (`run`, `walk`, `bike`, `strength`, `hiit`, `swim`, …), `m` minutes, `k` active kcal. |
+| `fl`, `el`, `wp` | Floors, elevation meters, wheelchair pushes. |
+| `sp`, `pw`, `cc`, `sc` | Speed m/s, power watts, cycling rpm, step cadence. Each is `[min, avg, max]`. |
+| `hy` | Hydration, milliliters. |
+| `ht` | Last height, centimeters. |
+| `lm`, `bn`, `wa` | Last lean mass, bone mass, body water, kg. |
+| `bt`, `bb` | Last body temperature and basal temperature, Celsius. |
+| `bp` | Last blood pressure, `[systolic, diastolic]` mmHg. |
+| `bg` | Last glucose, mmol/L. |
+| `rr` | Last respiratory rate. |
+| `vo` | Last VO2 max, ml/min/kg. |
+| `nu` | Nutrition for the day, `[kcal, protein g, carbs g, fat g]`. |
 
-Exercise types: `other_workout`, `badminton`, `baseball`, `basketball`, `biking`, `biking_stationary`, `boot_camp`, `boxing`, `calisthenics`, `cricket`, `dancing`, `elliptical`, `exercise_class`, `fencing`, `football_american`, `football_australian`, `frisbee_disc`, `golf`, `guided_breathing`, `gymnastics`, `handball`, `high_intensity_interval_training`, `hiking`, `ice_hockey`, `ice_skating`, `martial_arts`, `paddling`, `paragliding`, `pilates`, `racquetball`, `rock_climbing`, `roller_hockey`, `rowing`, `rowing_machine`, `rugby`, `running`, `running_treadmill`, `sailing`, `scuba_diving`, `skating`, `skiing`, `snowboarding`, `snowshoeing`, `soccer`, `softball`, `squash`, `stair_climbing`, `stair_climbing_machine`, `strength_training`, `stretching`, `surfing`, `swimming_open_water`, `swimming_pool`, `table_tennis`, `tennis`, `volleyball`, `walking`, `water_polo`, `weightlifting`, `wheelchair`, `yoga`.
+Days that contain only `ak`, `tk`, and `bk` are not sent during backfill.
 
 ## APK signing
 

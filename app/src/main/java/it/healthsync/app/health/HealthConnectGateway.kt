@@ -215,6 +215,24 @@ class HealthConnectGateway(private val context: Context) {
             emptyList()
         }
         val points = readPointRecords(client, grantedIds, windowStart, windowEnd)
+        val stepRecords = if ("steps" in grantedIds) readAll<StepsRecord>(client, windowStart, windowEnd).size else 0
+        val calorieDays = daily.count {
+            (it.activeCaloriesKcal ?: 0.0) > 0.0 ||
+                (it.totalCaloriesKcal ?: 0.0) > 0.0 ||
+                (it.basalCaloriesKcal ?: 0.0) > 0.0
+        }
+        val counts = mapOf(
+            "steps" to stepRecords,
+            "sleep" to sleep.size,
+            "weight" to weight.size,
+            "exercise" to exercise.size,
+            "calories" to calorieDays,
+            "heart_rate" to daily.sumOf { (it.heartRate?.sampleCount ?: 0L) }.toInt(),
+        )
+        android.util.Log.i(
+            "SaluteSync",
+            "read ${windowStart}..${windowEnd} " + counts.entries.joinToString(" ") { "${it.key}=${it.value}" },
+        )
 
         return ReadOutcome.Ok(
             HealthSnapshot(
@@ -242,8 +260,93 @@ class HealthConnectGateway(private val context: Context) {
                 bloodGlucose = points.bloodGlucose,
                 vo2Max = points.vo2Max,
                 unavailableMetrics = unavailable,
+                counts = counts,
             ),
         )
+    }
+
+    /**
+     * First local day in [start, end) that has steps, distance, sleep, exercise,
+     * heart-rate samples, weight, or body fat. Calorie estimates alone do not count.
+     */
+    suspend fun findEarliestNonCalorieDay(start: Instant, end: Instant, zone: ZoneId): java.time.LocalDate? {
+        val client = clientOrNull() ?: return null
+        val granted = try {
+            client.permissionController.getGrantedPermissions()
+        } catch (_: Exception) {
+            return null
+        }
+        val grantedIds = HealthPermissions.metrics.filter { it.permission in granted }.map { it.id }.toSet()
+        var month = start.atZone(zone).toLocalDate().withDayOfMonth(1)
+        val last = end.minusMillis(1).atZone(zone).toLocalDate()
+        while (!month.isAfter(last)) {
+            val from = maxOf(month.atStartOfDay(zone).toInstant(), start)
+            val to = minOf(month.plusMonths(1).atStartOfDay(zone).toInstant(), end)
+            if (from.isBefore(to) && rangeHasSignal(client, grantedIds, from, to)) {
+                var day = from.atZone(zone).toLocalDate()
+                val stop = to.minusMillis(1).atZone(zone).toLocalDate()
+                while (!day.isAfter(stop)) {
+                    val dayFrom = maxOf(day.atStartOfDay(zone).toInstant(), from)
+                    val dayTo = minOf(day.plusDays(1).atStartOfDay(zone).toInstant(), to)
+                    if (dayFrom.isBefore(dayTo) && rangeHasSignal(client, grantedIds, dayFrom, dayTo)) return day
+                    day = day.plusDays(1)
+                }
+            }
+            month = month.plusMonths(1)
+        }
+        return null
+    }
+
+    private suspend fun rangeHasSignal(
+        client: HealthConnectClient,
+        grantedIds: Set<String>,
+        from: Instant,
+        to: Instant,
+    ): Boolean {
+        val metrics = linkedSetOf<androidx.health.connect.client.aggregate.AggregateMetric<*>>()
+        if ("steps" in grantedIds) metrics += StepsRecord.COUNT_TOTAL
+        if ("distance" in grantedIds) metrics += DistanceRecord.DISTANCE_TOTAL
+        if ("sleep_session" in grantedIds) metrics += androidx.health.connect.client.records.SleepSessionRecord.SLEEP_DURATION_TOTAL
+        if ("exercise_session" in grantedIds) metrics += ExerciseSessionRecord.EXERCISE_DURATION_TOTAL
+        if ("heart_rate" in grantedIds) metrics += HeartRateRecord.MEASUREMENTS_COUNT
+        if (metrics.isNotEmpty()) {
+            val result = try {
+                client.aggregate(androidx.health.connect.client.request.AggregateRequest(metrics, androidx.health.connect.client.time.TimeRangeFilter.between(from, to)))
+            } catch (error: Exception) {
+                if (isHistoryLimit(error)) return false
+                throwIfDenied(error)
+                return false
+            }
+            if ((result[StepsRecord.COUNT_TOTAL] ?: 0L) > 0L) return true
+            if ((result[DistanceRecord.DISTANCE_TOTAL]?.inMeters ?: 0.0) > 0.0) return true
+            val sleep = result[androidx.health.connect.client.records.SleepSessionRecord.SLEEP_DURATION_TOTAL]
+            if (sleep != null && !sleep.isZero) return true
+            val exercise = result[ExerciseSessionRecord.EXERCISE_DURATION_TOTAL]
+            if (exercise != null && !exercise.isZero) return true
+            if ((result[HeartRateRecord.MEASUREMENTS_COUNT] ?: 0L) > 0L) return true
+        }
+        if ("weight" in grantedIds && hasOne<androidx.health.connect.client.records.WeightRecord>(client, from, to)) return true
+        if ("body_fat" in grantedIds && hasOne<androidx.health.connect.client.records.BodyFatRecord>(client, from, to)) return true
+        return false
+    }
+
+    private suspend inline fun <reified T : androidx.health.connect.client.records.Record> hasOne(
+        client: HealthConnectClient,
+        from: Instant,
+        to: Instant,
+    ): Boolean {
+        return try {
+            client.readRecords(
+                androidx.health.connect.client.request.ReadRecordsRequest<T>(
+                    timeRangeFilter = androidx.health.connect.client.time.TimeRangeFilter.between(from, to),
+                    pageSize = 1,
+                ),
+            ).records.isNotEmpty()
+        } catch (error: Exception) {
+            if (isHistoryLimit(error)) return false
+            throwIfDenied(error)
+            false
+        }
     }
 
     private suspend fun readDaily(

@@ -4,18 +4,19 @@ import android.content.Context
 import android.util.Log
 import it.healthsync.app.BuildConfig
 import it.healthsync.app.data.SettingsRepository
-import it.healthsync.app.domain.BackfillPlanner
-import it.healthsync.app.domain.BackfillState
-import it.healthsync.app.domain.HealthPayload
+import it.healthsync.app.domain.CompactPayloads
 import it.healthsync.app.domain.HistoryRange
-import it.healthsync.app.domain.PayloadBuilder
-import it.healthsync.app.domain.SyncWindowResolver
+import it.healthsync.app.domain.SendPlan
+import it.healthsync.app.domain.calorieOnlySourceHint
 import it.healthsync.app.domain.validateWebhookSettings
-import it.healthsync.app.health.HealthPermissions
 import it.healthsync.app.health.HealthConnectGateway
+import it.healthsync.app.health.HealthPermissions
 import it.healthsync.app.health.ReadOutcome
 import java.time.Instant
+import java.time.LocalDate
 import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.time.temporal.ChronoUnit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.withContext
@@ -28,6 +29,14 @@ sealed class SyncOutcome {
     data object Busy : SyncOutcome()
 }
 
+/** What the one-step worker should do after a single pass. */
+sealed class StepResult {
+    data class Posted(val gapSeconds: Long) : StepResult()
+    data class ScanMore(val delaySeconds: Long) : StepResult()
+    data object Finished : StepResult()
+    data class Failed(val failure: SyncOutcome.Failure) : StepResult()
+}
+
 class SyncRunner(
     private val settings: SettingsRepository,
     private val gateway: HealthConnectGateway,
@@ -36,21 +45,50 @@ class SyncRunner(
     private val now: () -> Instant = Instant::now,
     private val zone: () -> ZoneId = { ZoneId.systemDefault() },
 ) {
-    suspend fun sync(origin: SyncOrigin): SyncOutcome = locked(origin, restartHistory = false)
+    /** Resume an in-progress export, or start today's incremental window. */
+    fun armSync() {
+        val existing = settings.plan()
+        if (existing != null && !existing.finished) return
+        val attemptAt = now()
+        val start = settings.syncState.value.lastSuccess ?: attemptAt.minus(7, ChronoUnit.DAYS)
+        settings.savePlan(
+            SendPlan(
+                mode = SendPlan.INCREMENTAL,
+                phase = SendPlan.SEND,
+                cursorEpochMs = start.toEpochMilli(),
+                endEpochMs = attemptAt.toEpochMilli(),
+            ),
+        )
+    }
 
-    suspend fun importHistory(origin: SyncOrigin): SyncOutcome = locked(origin, restartHistory = true)
+    /** Drop progress and import history again from the configured start date. */
+    fun armReimport() {
+        val attemptAt = now()
+        val historyGranted = false
+        settings.clearPlan()
+        settings.savePlan(
+            SendPlan(
+                mode = SendPlan.BACKFILL,
+                phase = SendPlan.SCAN,
+                cursorEpochMs = attemptAt.toEpochMilli(),
+                endEpochMs = attemptAt.toEpochMilli(),
+                historyLimited = !historyGranted,
+            ),
+        )
+    }
 
-    private suspend fun locked(origin: SyncOrigin, restartHistory: Boolean): SyncOutcome = withContext(Dispatchers.IO) {
-        if (!mutex.tryLock()) return@withContext SyncOutcome.Busy
+    suspend fun step(origin: SyncOrigin): StepResult = withContext(Dispatchers.IO) {
+        if (!mutex.tryLock()) return@withContext StepResult.Failed(
+            SyncOutcome.Failure("C'è già un invio in corso.", retryable = true),
+        )
         try {
-            if (restartHistory) settings.clearBackfill()
-            perform(origin)
+            performStep(origin)
         } finally {
             mutex.unlock()
         }
     }
 
-    private suspend fun perform(origin: SyncOrigin): SyncOutcome {
+    private suspend fun performStep(origin: SyncOrigin): StepResult {
         val attemptAt = now()
         val config = settings.webhook()
         val validation = validateWebhookSettings(config.url, config.headerName, config.headerValue)
@@ -59,136 +97,166 @@ class SyncRunner(
                 ?: "Impostazioni webhook non valide."
             val failure = SyncOutcome.Failure(message, retryable = false)
             settings.markFailure(attemptAt, failure.message, null)
-            return failure
+            return StepResult.Failed(failure)
+        }
+        val zoneId = zone()
+        var plan = settings.plan() ?: SendPlan(
+            mode = SendPlan.BACKFILL,
+            phase = SendPlan.SCAN,
+            cursorEpochMs = attemptAt.toEpochMilli(),
+            endEpochMs = attemptAt.toEpochMilli(),
+        )
+        if (plan.finished) return StepResult.Finished
+        if (plan.phase == SendPlan.SCAN) {
+            plan = scan(plan, attemptAt, zoneId)
+            settings.savePlan(plan)
+            if (plan.finished) {
+                settings.markSuccess(attemptAt, Instant.ofEpochMilli(plan.endEpochMs), planMessage(plan), 0)
+                return StepResult.Finished
+            }
         }
         return try {
-            val zoneId = zone()
-            val existing = settings.backfillState()
-            if (existing == null || !existing.finished) {
-                return backfill(origin, attemptAt, zoneId, config.url, config.headerName, config.headerValue, existing)
-            }
-            val storedSuccess = settings.syncState.value.lastSuccess
-            val window = SyncWindowResolver.resolve(storedSuccess, attemptAt)
-            when (val read = gateway.read(window.start, window.end, zoneId, window.historyLimited)) {
-                is ReadOutcome.Unavailable -> fail(attemptAt, read.message, retryable = false)
-                is ReadOutcome.PermissionDenied -> fail(attemptAt, read.message, retryable = false)
-                is ReadOutcome.Ok -> {
-                    val payload = PayloadBuilder.build(read.snapshot, appVersion, attemptAt)
-                    val body = PayloadBuilder.buildJson(read.snapshot, appVersion, attemptAt)
-                    when (val posted = poster.post(config.url, config.headerName, config.headerValue, body)) {
-                        is PostResult.Ok -> {
-                            val message = successMessage(payload, posted.code, zoneId)
-                            settings.markSuccess(attemptAt, window.end, message, posted.code)
-                            SyncOutcome.Success(message, posted.code)
-                        }
-                        is PostResult.HttpError -> {
-                            val base = "Il webhook ha risposto HTTP ${posted.code}."
-                            fail(attemptAt, withRetryHint(base, posted.retryable, origin), posted.retryable, posted.code)
-                        }
-                        is PostResult.NetworkError -> {
-                            val base = "Connessione al webhook non riuscita."
-                            fail(attemptAt, withRetryHint(base, retryable = true, origin), retryable = true)
-                        }
-                    }
-                }
-            }
+            sendWindow(plan, attemptAt, zoneId, config.url, config.headerName, config.headerValue, origin)
         } catch (error: Exception) {
-            Log.e(TAG, "sync failed: ${error.javaClass.simpleName}")
-            fail(
-                attemptAt,
-                withRetryHint("Errore imprevisto durante la sincronizzazione.", retryable = true, origin),
+            Log.e(TAG, "step failed: ${error.javaClass.simpleName}")
+            val failure = SyncOutcome.Failure(
+                withRetryHint("Errore imprevisto durante l'invio.", retryable = true, origin),
                 retryable = true,
             )
+            settings.markFailure(attemptAt, failure.message, null)
+            StepResult.Failed(failure)
         }
     }
 
-    private suspend fun backfill(
-        origin: SyncOrigin,
-        attemptAt: Instant,
-        zoneId: java.time.ZoneId,
+    private suspend fun scan(plan: SendPlan, now: Instant, zoneId: ZoneId): SendPlan {
+        val granted = gateway.grantedPermissions()
+        if (granted.any { it in HealthPermissions.readPermissions }) settings.rememberFirstGrant(now)
+        val historyGranted = gateway.historySupported() && HealthPermissions.history in granted
+        val missing = HealthPermissions.metrics.filter { it.permission !in granted }.map { it.id }
+        Log.i(TAG, "permissions missing=${missing.joinToString()}")
+        val horizonStart = HistoryRange.earliest(now, historyGranted, settings.firstGrant())
+        val userDate = settings.backfillStartDate().takeIf { it.isNotBlank() }?.let {
+            runCatching { LocalDate.parse(it) }.getOrNull()
+        }
+        settings.noteProgress(now, "Cerco il primo giorno con dati diversi dalle calorie…")
+        val discovered = userDate ?: gateway.findEarliestNonCalorieDay(horizonStart, now, zoneId)
+        if (discovered == null) {
+            settings.noteProgress(
+                now,
+                "Nessun giorno con passi, sonno, peso o allenamenti. Controlla le autorizzazioni di Samsung Health.",
+            )
+            return plan.copy(finished = true, historyLimited = !historyGranted, endEpochMs = now.toEpochMilli())
+        }
+        val start = discovered.atStartOfDay(zoneId).toInstant().let { if (it.isBefore(horizonStart)) horizonStart else it }
+        return plan.copy(
+            phase = SendPlan.SEND,
+            cursorEpochMs = start.toEpochMilli(),
+            endEpochMs = now.toEpochMilli(),
+            historyLimited = !historyGranted,
+            finished = !start.isBefore(now),
+        )
+    }
+
+    private suspend fun sendWindow(
+        plan: SendPlan,
+        now: Instant,
+        zoneId: ZoneId,
         url: String,
         headerName: String,
         headerValue: String,
-        existing: BackfillState?,
-    ): SyncOutcome {
-        val granted = gateway.grantedPermissions()
-        if (granted.any { it in HealthPermissions.readPermissions }) {
-            settings.rememberFirstGrant(attemptAt)
-        }
-        var state = existing ?: run {
-            val historyGranted = gateway.historySupported() && HealthPermissions.history in granted
-            val start = HistoryRange.earliest(attemptAt, historyGranted, settings.firstGrant())
-            val chunks = BackfillPlanner.months(start, attemptAt, zoneId)
-            BackfillState(
-                chunks = chunks,
-                completed = 0,
-                historyLimited = !historyGranted,
-                finished = chunks.isEmpty(),
-            ).also { settings.saveBackfill(it) }
-        }
-        var lastCode = 0
-        while (state.chunks.isNotEmpty()) {
-            val window = state.chunks.first()
-            val index = state.completed + 1
-            val total = state.total
-            when (val read = gateway.read(window.start, window.end, zoneId, state.historyLimited, allowHistoryClamp = false)) {
-                is ReadOutcome.Unavailable -> return fail(attemptAt, read.message, retryable = false)
-                is ReadOutcome.PermissionDenied -> return fail(attemptAt, read.message, retryable = false)
+        origin: SyncOrigin,
+    ): StepResult {
+        var cursor = Instant.ofEpochMilli(plan.cursorEpochMs)
+        val end = Instant.ofEpochMilli(plan.endEpochMs)
+        var sent = plan.sent
+        var hops = 0
+        while (cursor.isBefore(end) && hops < 12) {
+            val windowEnd = minOf(cursor.plus(7, ChronoUnit.DAYS), end)
+            when (val read = gateway.read(cursor, windowEnd, zoneId, plan.historyLimited, allowHistoryClamp = false)) {
+                is ReadOutcome.Unavailable -> return failStep(now, read.message, false)
+                is ReadOutcome.PermissionDenied -> return failStep(now, read.message, false)
                 is ReadOutcome.Ok -> {
-                    val body = PayloadBuilder.buildJson(
-                        read.snapshot,
-                        appVersion,
-                        attemptAt,
-                        kind = HealthPayload.KIND_BACKFILL,
-                        chunkIndex = index,
-                        chunkTotal = total,
-                    )
-                    val tooBig = body.toByteArray(Charsets.UTF_8).size > BackfillPlanner.MAX_CHUNK_BYTES
-                    val parts = if (tooBig) BackfillPlanner.split(window, zoneId) else emptyList()
-                    if (tooBig && parts.size > 1) {
-                        state = state.replaceFirst(parts)
-                        settings.saveBackfill(state)
-                        settings.noteProgress(attemptAt, "Un blocco dello storico è troppo grande: lo divido e riprovo.")
+                    settings.saveCounts(read.snapshot.counts)
+                    Log.i(TAG, "counts " + read.snapshot.counts.entries.joinToString(" ") { "${it.key}=${it.value}" })
+                    var days = CompactPayloads.daysFrom(read.snapshot)
+                    if (plan.mode == SendPlan.BACKFILL) days = CompactPayloads.forBackfill(days)
+                    if (days.isEmpty()) {
+                        cursor = windowEnd
+                        hops += 1
+                        settings.savePlan(plan.copy(cursorEpochMs = cursor.toEpochMilli()))
                         continue
                     }
-                    when (val posted = poster.post(url, headerName, headerValue, body)) {
+                    val syncedAt = DateTimeFormatter.ISO_OFFSET_DATE_TIME.format(
+                        now.atZone(zoneId).truncatedTo(ChronoUnit.SECONDS),
+                    )
+                    val bodies = CompactPayloads.pack(
+                        days = days,
+                        kind = if (plan.mode == SendPlan.BACKFILL) CompactPayloads.KIND_BACKFILL else CompactPayloads.KIND_INCREMENTAL,
+                        zone = zoneId.id,
+                        app = appVersion,
+                        syncedAt = syncedAt,
+                        startIndex = sent + 1,
+                    )
+                    val body = bodies.first()
+                    check(CompactPayloads.bytes(body.json) <= CompactPayloads.MAX_BYTES)
+                    when (val posted = poster.post(url, headerName, headerValue, body.json)) {
                         is PostResult.Ok -> {
-                            lastCode = posted.code
-                            state = state.advance()
-                            settings.saveBackfill(state)
-                            settings.noteProgress(
-                                attemptAt,
-                                "Storico: blocco $index di $total inviato.",
-                            )
+                            sent += 1
+                            val nextDay = body.lastDate.plusDays(1).atStartOfDay(zoneId).toInstant()
+                            val advanced = if (nextDay.isAfter(cursor)) nextDay else windowEnd
+                            val finished = !advanced.isBefore(end)
+                            val updated = plan.copy(cursorEpochMs = advanced.toEpochMilli(), sent = sent, finished = finished)
+                            settings.savePlan(updated)
+                            val hint = if (calorieOnlySourceHint(read.snapshot.counts)) {
+                                " Solo calorie: in Health Connect apri Autorizzazioni app, Samsung Health, e abilita la scrittura di passi, sonno, peso e allenamenti."
+                            } else {
+                                ""
+                            }
+                            settings.noteProgress(now, "Invio $sent accettato (fino al ${body.lastDate}).$hint")
+                            return if (finished) {
+                                settings.markSuccess(now, end, "Invio completato: $sent richieste.$hint", posted.code)
+                                StepResult.Finished
+                            } else {
+                                StepResult.Posted(settings.gapSeconds())
+                            }
                         }
                         is PostResult.HttpError -> {
-                            val base = "Il webhook ha risposto HTTP ${posted.code} durante l'importazione storica."
-                            return fail(attemptAt, withRetryHint(base, posted.retryable, origin), posted.retryable, posted.code)
+                            val message = "Il webhook ha risposto HTTP ${posted.code}."
+                            return failStep(now, withRetryHint(message, posted.retryable, origin), posted.retryable, posted.code)
                         }
                         is PostResult.NetworkError -> {
-                            return fail(
-                                attemptAt,
-                                withRetryHint("Connessione al webhook non riuscita durante l'importazione storica.", true, origin),
-                                retryable = true,
+                            return failStep(
+                                now,
+                                withRetryHint("Connessione al webhook non riuscita.", true, origin),
+                                true,
                             )
                         }
                     }
                 }
             }
         }
-        val limited = if (state.historyLimited) {
-            " Senza il permesso di lettura dello storico la finestra parte da 30 giorni prima della prima concessione."
+        val finished = !cursor.isBefore(end)
+        settings.savePlan(plan.copy(cursorEpochMs = cursor.toEpochMilli(), finished = finished))
+        return if (finished) {
+            settings.markSuccess(now, end, "Nessun altro giorno da inviare.", 0)
+            StepResult.Finished
         } else {
-            ""
+            settings.noteProgress(now, "Nessun dato da inviare fino al ${cursor.atZone(zoneId).toLocalDate()}. Continuo la ricerca.")
+            StepResult.ScanMore(5)
         }
-        val message = "Importazione storica completata: ${state.completed} blocchi.$limited"
-        settings.markSuccess(attemptAt, attemptAt, message, lastCode)
-        return SyncOutcome.Success(message, lastCode)
     }
 
-    private fun fail(now: Instant, message: String, retryable: Boolean, httpCode: Int? = null): SyncOutcome.Failure {
+    private fun failStep(now: Instant, message: String, retryable: Boolean, httpCode: Int? = null): StepResult {
         settings.markFailure(now, message, httpCode)
-        return SyncOutcome.Failure(message, retryable, httpCode)
+        return StepResult.Failed(SyncOutcome.Failure(message, retryable, httpCode))
+    }
+
+    private fun planMessage(plan: SendPlan): String {
+        return if (plan.historyLimited) {
+            "Importazione ferma: nessun dato oltre le calorie nella finestra consentita."
+        } else {
+            "Importazione ferma: nessun giorno con dati diversi dalle calorie."
+        }
     }
 
     companion object {
@@ -197,40 +265,18 @@ class SyncRunner(
 
         fun create(context: Context): SyncRunner {
             val appContext = context.applicationContext
-            val version = BuildConfig.VERSION_NAME
             return SyncRunner(
                 settings = SettingsRepository(appContext),
                 gateway = HealthConnectGateway(appContext),
-                poster = WebhookClient(version),
-                appVersion = version,
+                poster = WebhookClient(BuildConfig.VERSION_NAME),
+                appVersion = BuildConfig.VERSION_NAME,
             )
-        }
-
-        private fun successMessage(
-            payload: HealthPayload,
-            httpCode: Int,
-            zone: ZoneId,
-        ): String {
-            val start = payload.window.start
-            val end = payload.window.end
-            val counts = listOf(
-                count(payload.days.size, "giorno", "giorni"),
-                count(payload.sleepSessions.size, "sonno", "sonni"),
-                count(payload.weightReadings.size, "pesata", "pesate"),
-                count(payload.exerciseSessions.size, "allenamento", "allenamenti"),
-            ).joinToString(", ")
-            val limited = if (payload.historyLimited) " Finestra limitata agli ultimi 30 giorni." else ""
-            return "Inviati $counts (HTTP $httpCode). Dal $start al $end. Fuso ${zone.id}.$limited"
-        }
-
-        private fun count(n: Int, singular: String, plural: String): String {
-            return if (n == 1) "1 $singular" else "$n $plural"
         }
 
         private fun withRetryHint(base: String, retryable: Boolean, origin: SyncOrigin): String {
             val hint = when {
                 retryable && origin == SyncOrigin.WORKER -> " Nuovo tentativo automatico."
-                retryable -> " Puoi riprovare con Sincronizza ora."
+                retryable -> " L'invio riprende da solo."
                 else -> ""
             }
             return base + hint

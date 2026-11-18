@@ -8,6 +8,9 @@ import it.healthsync.app.BuildConfig
 import it.healthsync.app.data.SettingsRepository
 import it.healthsync.app.data.SyncState
 import it.healthsync.app.domain.BackfillState
+import it.healthsync.app.domain.SendPlan
+import it.healthsync.app.domain.calorieOnlySourceHint
+import it.healthsync.app.sync.SyncScheduler
 import it.healthsync.app.domain.DEFAULT_AUTH_HEADER
 import it.healthsync.app.domain.SettingsValidation
 import it.healthsync.app.domain.validateWebhookSettings
@@ -44,6 +47,16 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
     )
 
     val appVersion: String = BuildConfig.VERSION_NAME
+    val plan: StateFlow<SendPlan?> = settings.plan.stateIn(
+        viewModelScope,
+        SharingStarted.WhileSubscribed(5_000),
+        settings.plan.value,
+    )
+    val counts: StateFlow<Map<String, Int>> = settings.counts.stateIn(
+        viewModelScope,
+        SharingStarted.WhileSubscribed(5_000),
+        settings.counts.value,
+    )
     val backfill: StateFlow<BackfillState?> = settings.backfill.stateIn(
         viewModelScope,
         SharingStarted.WhileSubscribed(5_000),
@@ -58,6 +71,8 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
     var url = androidx.compose.runtime.mutableStateOf("")
     var headerName = androidx.compose.runtime.mutableStateOf(DEFAULT_AUTH_HEADER)
     var headerValue = androidx.compose.runtime.mutableStateOf("")
+    var startDate = androidx.compose.runtime.mutableStateOf(settings.backfillStartDate())
+    var gapSeconds = androidx.compose.runtime.mutableStateOf(settings.gapSeconds().toString())
     var validation = androidx.compose.runtime.mutableStateOf(SettingsValidation(null, null, null))
     var health = androidx.compose.runtime.mutableStateOf(HealthUi())
     var syncing = androidx.compose.runtime.mutableStateOf(false)
@@ -105,15 +120,18 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
         validation.value = result
         if (!result.ok) return
         settings.saveWebhook(url.value, headerName.value, headerValue.value)
+        settings.setBackfillStartDate(startDate.value)
+        settings.setGapSeconds(gapSeconds.value.toLongOrNull() ?: 60L)
+        gapSeconds.value = settings.gapSeconds().toString()
         headerName.value = settings.webhook().headerName
         banner.value = "Impostazioni salvate sul telefono."
     }
 
-    fun importHistory() = runSync { runner.importHistory(SyncOrigin.FOREGROUND) }
+    fun reimport() = launchQueue(reset = true)
 
-    fun syncNow() = runSync { runner.sync(SyncOrigin.FOREGROUND) }
+    fun syncNow() = launchQueue(reset = false)
 
-    private fun runSync(block: suspend () -> SyncOutcome) {
+    private fun launchQueue(reset: Boolean) {
         val result = validateWebhookSettings(url.value, headerName.value, headerValue.value)
         validation.value = result
         if (!result.ok) {
@@ -121,16 +139,24 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
             return
         }
         settings.saveWebhook(url.value, headerName.value, headerValue.value)
+        settings.setBackfillStartDate(startDate.value)
+        settings.setGapSeconds(gapSeconds.value.toLongOrNull() ?: 60L)
+        gapSeconds.value = settings.gapSeconds().toString()
         headerName.value = settings.webhook().headerName
-        viewModelScope.launch {
-            syncing.value = true
-            val outcome = block()
-            syncing.value = false
-            settings.reload()
-            banner.value = when (outcome) {
-                is SyncOutcome.Success -> "Sincronizzazione completata."
-                is SyncOutcome.Failure -> outcome.message
-                SyncOutcome.Busy -> "C'è già una sincronizzazione in corso."
+        val current = settings.plan()
+        if (reset) {
+            runner.armReimport()
+            SyncScheduler.kick(getApplication(), replace = true)
+            banner.value = "Reimportazione avviata. Un invio ogni ${settings.gapSeconds()} secondi."
+        } else {
+            if (current == null || current.finished) {
+                if (current != null) runner.armSync()
+            }
+            SyncScheduler.kick(getApplication(), replace = false)
+            banner.value = if (current == null) {
+                "Importazione storica avviata. Un invio ogni ${settings.gapSeconds()} secondi."
+            } else {
+                "Invio in coda. Un invio ogni ${settings.gapSeconds()} secondi."
             }
         }
     }

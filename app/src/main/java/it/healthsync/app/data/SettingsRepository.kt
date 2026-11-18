@@ -3,7 +3,9 @@ package it.healthsync.app.data
 import android.content.Context
 import android.content.SharedPreferences
 import it.healthsync.app.domain.BackfillState
+import it.healthsync.app.domain.CompactPayloads
 import it.healthsync.app.domain.DEFAULT_AUTH_HEADER
+import it.healthsync.app.domain.SendPlan
 import it.healthsync.app.domain.StoredBackfill
 import it.healthsync.app.domain.normalizeHeaderName
 import it.healthsync.app.domain.toState
@@ -44,6 +46,10 @@ class SettingsRepository(context: Context) {
     val syncState: StateFlow<SyncState> = _syncState.asStateFlow()
     private val _backfill = MutableStateFlow(readBackfill())
     val backfill: StateFlow<BackfillState?> = _backfill.asStateFlow()
+    private val _plan = MutableStateFlow(readPlan())
+    val plan: StateFlow<SendPlan?> = _plan.asStateFlow()
+    private val _counts = MutableStateFlow(readCounts())
+    val counts: StateFlow<Map<String, Int>> = _counts.asStateFlow()
 
     private val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, _ ->
         _syncState.value = readSyncState()
@@ -72,6 +78,40 @@ class SettingsRepository(context: Context) {
     fun reload() {
         _syncState.value = readSyncState()
         _backfill.value = readBackfill()
+        _plan.value = readPlan()
+        _counts.value = readCounts()
+    }
+
+    fun gapSeconds(): Long = prefs.getLong(KEY_GAP, CompactPayloads.MIN_GAP_SECONDS)
+        .coerceAtLeast(CompactPayloads.MIN_GAP_SECONDS)
+
+    fun setGapSeconds(seconds: Long) {
+        prefs.edit().putLong(KEY_GAP, seconds.coerceAtLeast(CompactPayloads.MIN_GAP_SECONDS)).commit()
+    }
+
+    /** Empty means "first day that is not only calories". */
+    fun backfillStartDate(): String = prefs.getString(KEY_START_DATE, "").orEmpty()
+
+    fun setBackfillStartDate(isoDate: String) {
+        prefs.edit().putString(KEY_START_DATE, isoDate.trim()).commit()
+    }
+
+    fun plan(): SendPlan? = readPlan()
+
+    fun savePlan(plan: SendPlan) {
+        prefs.edit().putString(KEY_PLAN, json.encodeToString(plan)).commit()
+        _plan.value = plan
+    }
+
+    fun clearPlan() {
+        prefs.edit().remove(KEY_PLAN).commit()
+        _plan.value = null
+    }
+
+    fun saveCounts(counts: Map<String, Int>) {
+        val raw = counts.entries.joinToString(",") { "${it.key}=${it.value}" }
+        prefs.edit().putString(KEY_COUNTS, raw).commit()
+        _counts.value = counts
     }
 
     fun backfillState(): BackfillState? = readBackfill()
@@ -125,6 +165,19 @@ class SettingsRepository(context: Context) {
         _syncState.value = readSyncState()
     }
 
+    private fun readPlan(): SendPlan? {
+        val raw = prefs.getString(KEY_PLAN, null) ?: return null
+        return runCatching { json.decodeFromString<SendPlan>(raw) }.getOrNull()
+    }
+
+    private fun readCounts(): Map<String, Int> {
+        val raw = prefs.getString(KEY_COUNTS, null) ?: return emptyMap()
+        return raw.split(',').mapNotNull { part ->
+            val bits = part.split('=')
+            if (bits.size != 2) null else bits[0] to bits[1].toIntOrNull()
+        }.mapNotNull { (key, value) -> value?.let { key to it } }.toMap()
+    }
+
     private fun readBackfill(): BackfillState? {
         val raw = prefs.getString(KEY_BACKFILL, null) ?: return null
         return runCatching { json.decodeFromString<StoredBackfill>(raw).toState() }.getOrNull()
@@ -152,6 +205,10 @@ class SettingsRepository(context: Context) {
         private const val KEY_MESSAGE = "last_message"
         private const val KEY_HTTP = "last_http_code"
         private const val KEY_BACKFILL = "backfill_plan"
+        private const val KEY_PLAN = "send_plan"
+        private const val KEY_COUNTS = "last_counts"
+        private const val KEY_GAP = "gap_seconds"
+        private const val KEY_START_DATE = "backfill_start_date"
         private const val KEY_FIRST_GRANT = "first_grant_epoch_ms"
     }
 }
