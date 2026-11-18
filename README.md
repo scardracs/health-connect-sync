@@ -1,52 +1,54 @@
 # Salute Sync
 
-App Android che legge i dati dell'utente da **Health Connect** (dove Samsung Health può sincronizzarli) e li invia in JSON a un webhook, una volta al giorno.
+Android app that reads the user's data from **Health Connect** (where Samsung Health can sync it) and sends it as JSON to a webhook once a day.
 
-Non c'è un backend, non ci sono analytics e non ci sono tracker di terze parti. L'URL e la chiave restano sul telefono, cifrati con `EncryptedSharedPreferences` (AES-256, chiave nell'Android Keystore).
+There is no backend, no analytics, and no third-party trackers. The URL and the key stay on the phone, encrypted with `EncryptedSharedPreferences` (AES-256, key in the Android Keystore).
+
+The in-app UI is Italian. This README, the code comments, and the release notes are English.
 
 - Kotlin, Jetpack Compose
 - `minSdk` 28, `compileSdk` / `targetSdk` 37 (Android 17)
 - Health Connect `connect-client` 1.1.0
-- WorkManager, sync intorno alle 6:00 nel fuso del telefono
+- WorkManager, sync around 06:00 in the phone's time zone
 
-## Installazione sul telefono
+## Install on a phone
 
-L'APK da sideloadare è firmato (vedi sotto) e si chiama `salute-sync-1.0.0.apk`.
+The sideload APK is signed (see below) and is named `salute-sync-1.0.0.apk`.
 
-1. Copia l'APK sul telefono (Drive, mail, cavo, o scaricalo dal browser).
-2. Aprilo. Se Android blocca l'installazione, consenti **Installa app sconosciute** per l'app da cui lo stai aprendo (Chrome, File, Gmail, …). Su Android 8 e successivi il permesso è per singola app, non un interruttore globale: Impostazioni → App → l'app usata per aprire il file → Installa app sconosciute.
-3. Conferma l'installazione e apri **Salute Sync**.
-4. Se il telefono è Android 13 o precedente e Health Connect manca, tocca **Installa o aggiorna Health Connect** (Play Store, pacchetto `com.google.android.apps.healthdata`). Su Android 14 e successivi Health Connect è nel sistema: Impostazioni → Sicurezza e privacy → Controlli privacy → Health Connect, oppure cerca «Health Connect».
-5. In **Samsung Health** attiva la sincronizzazione verso Health Connect per i tipi che ti servono (passi, sonno, peso, allenamenti, frequenza cardiaca, e gli altri). Il percorso del menu cambia con la versione dell'app: cerca «Health Connect» nelle impostazioni di Samsung Health e controlla poi, in Health Connect, che Samsung Health compaia tra le sorgenti.
-6. In Salute Sync tocca **Concedi permessi di lettura** e accetta i tipi che vuoi inviare. Quelli negati non vengono letti e finiscono in `unavailableMetrics`, senza essere trattati come zeri.
-7. Se il telefono lo supporta, tocca **Consenti lettura in background**. Senza quel permesso la sync delle 6:00 non può leggere a schermo spento: resta disponibile **Sincronizza ora**, con l'app aperta.
-8. Incolla l'URL del webhook (`https://` consigliato; `http://` è ammesso, per esempio su una rete locale) e il valore dell'header. Il nome dell'header è `Authorization` e si può cambiare.
-9. Tocca **Salva impostazioni**, poi **Sincronizza ora**.
-10. Controlla in basso l'ora e l'esito dell'ultima sync. La sync automatica è un lavoro WorkManager ogni 24 ore, con il primo avvio puntato alle 6:00 del fuso del telefono (in Italia, `Europe/Rome`). Android può ritardarlo se il risparmio energetico è attivo: il pulsante **Non ottimizzare la batteria** apre la richiesta di sistema.
+1. Copy the APK to the phone (Drive, email, cable, or download it in the browser).
+2. Open it. If Android blocks the install, allow **Install unknown apps** for the app you are opening it from (Chrome, Files, Gmail, and so on). On Android 8 and later this permission is per app, not a global switch: Settings → Apps → the app used to open the file → Install unknown apps.
+3. Confirm the install and open **Salute Sync**.
+4. On Android 13 or earlier, if Health Connect is missing, tap **Installa o aggiorna Health Connect** (Play Store, package `com.google.android.apps.healthdata`). On Android 14 and later Health Connect is part of the system: Settings → Security and privacy → Privacy controls → Health Connect, or search for "Health Connect".
+5. In **Samsung Health**, turn on sync to Health Connect for the types you want (steps, sleep, weight, workouts, heart rate, and the others). The menu path changes with the Samsung Health version: search for "Health Connect" in Samsung Health settings, then check in Health Connect that Samsung Health is listed as a source.
+6. In Salute Sync tap **Concedi permessi di lettura** and accept the types you want to send. Denied types are not read and are listed in `unavailableMetrics`. They are not treated as zeros.
+7. If the phone supports it, tap **Consenti lettura in background**. Without that permission the 06:00 sync cannot read data while the screen is off. **Sincronizza ora** still works while the app is open.
+8. Paste the webhook URL (`https://` is recommended; `http://` is allowed, for example on a local network) and the header value. The header name defaults to `Authorization` and can be changed.
+9. Tap **Salva impostazioni**, then **Sincronizza ora**.
+10. Check the time and result of the last sync at the bottom. The automatic sync is a WorkManager job every 24 hours, with the first run aimed at 06:00 in the phone's time zone (in Italy, `Europe/Rome`). Android may delay it while battery saving is on. The **Non ottimizzare la batteria** button opens the system request.
 
-Per aggiornare l'app, installa sopra lo stesso APK firmato con la stessa chiave. Disinstallare cancella URL, chiave e l'istante dell'ultima sync.
+To update the app, install a newer APK signed with the same key over this one. Uninstalling clears the URL, the key, and the time of the last sync.
 
-## Cosa viene inviato
+## What is sent
 
-`POST` sull'URL salvato.
+`POST` to the saved URL.
 
 - `Content-Type: application/json; charset=utf-8`
-- Header con il nome e il valore che hai impostato (default `Authorization`)
+- The header name and value you configured (default name `Authorization`)
 - `User-Agent: SaluteSync/1.0.0`
 
-La prima sync copre gli **ultimi 7 giorni**. Quelle dopo partono dall'istante dell'ultima sync **riuscita** e arrivano a «adesso». L'intervallo è `[inizio, fine)`: il record che cade esattamente sulla fine entra nella sync successiva, così non si duplica e non si perde.
+The first sync covers the **last 7 days**. Later syncs start at the time of the last **successful** sync and run up to now. The range is `[start, end)`: a record that falls exactly on the end is included in the next sync, so it is neither duplicated nor dropped.
 
-I totali giornalieri (passi, distanza, calorie, frequenza cardiaca, frequenza a riposo, idratazione) arrivano dall'aggregazione di Health Connect, solo sulla porzione di giorno inclusa nella finestra. Così passi scritti da più sorgenti non vengono sommati due volte. Variabilità cardiaca, ossigeno e nutrizione sono calcolati sui campioni letti. Sonno, peso, massa grassa e allenamenti restano eventi singoli.
+Daily totals (steps, distance, calories, heart rate, resting heart rate, hydration) come from Health Connect aggregation, and only for the slice of the day inside the window. Steps written by more than one source are not added twice. Heart-rate variability, oxygen, and nutrition are computed from the samples that were read. Sleep, weight, body fat, and workouts stay as individual events.
 
-Una sessione di sonno o un allenamento entra nel JSON se l'**inizio** cade nella finestra; durata e fasi sono quelle intere, anche se la fine sfora. Le calorie e la distanza di un allenamento sono l'aggregato di Health Connect sull'intervallo della sessione.
+A sleep session or a workout is included when its **start** falls inside the window. Duration and stages are the full session, even if the end is past the window. Workout calories and distance are the Health Connect aggregate over the session interval.
 
-Se Health Connect rifiuta una finestra più lunga di 30 giorni prima della concessione del permesso, l'app riprova sugli ultimi 30 giorni e mette `"historyLimited": true`. Il permesso di storico oltre quel limite non è richiesto.
+If Health Connect rejects a window that starts more than 30 days before the permission was granted, the app retries the last 30 days and sets `"historyLimited": true`. The extra history permission is not requested.
 
-In caso di errore di rete, HTTP 408, 429 o 5xx, WorkManager riprova con backoff esponenziale (minimo 15 minuti, fino a 5 tentativi in quel ciclo). Un URL o una chiave sbagliati (4xx) non vengono martellati. La sync periodica resta in agenda comunque.
+On a network error, or HTTP 408, 429, or 5xx, WorkManager retries with exponential backoff (minimum 15 minutes, up to 5 attempts in that cycle). A wrong URL or key (other 4xx) is not retried in a tight loop. The periodic sync stays scheduled either way.
 
-## Schema JSON (versione 1)
+## JSON schema (version 1)
 
-I campi null non vengono scritti. I numeri decimali sono arrotondati a 2 cifre. Gli istanti sono ISO-8601 con l'offset del fuso del telefono. `unavailableMetrics` elenca gli id non concessi, in ordine alfabetico.
+Null fields are omitted. Decimal numbers are rounded to 2 digits. Instants are ISO-8601 with the phone time-zone offset. `unavailableMetrics` lists ids that were not granted, in alphabetical order.
 
 ```json
 {
@@ -123,38 +125,38 @@ I campi null non vengono scritti. I numeri decimali sono arrotondati a 2 cifre. 
 }
 ```
 
-### Campi
+### Fields
 
-| Campo | Significato |
+| Field | Meaning |
 | --- | --- |
-| `schemaVersion` | Sempre `1` in questa app. |
-| `syncedAt` | Istante in cui l'app ha costruito il JSON. |
-| `timezone` | `ZoneId` del telefono, per esempio `Europe/Rome`. |
-| `appVersion` | `versionName` dell'app. |
-| `historyLimited` | `true` se la finestra è stata accorciata al limite dei 30 giorni di Health Connect. |
-| `window.start` / `window.end` | Intervallo letto, fine esclusa. |
-| `days[]` | Un oggetto per giorno locale che ha almeno un dato. I giorni vuoti non compaiono. `steps: 0` resta, perché è un totale vero. |
-| `heartRate` | Minimo, media e massimo in bpm, più il numero di campioni, dall'aggregato Health Connect. |
-| `restingHeartRateBpm` | Media dei rilevamenti a riposo di quel giorno (`BPM_AVG`). |
-| `heartRateVariabilityRmssdMillis` | Min / media / max della RMSSD, in millisecondi. |
-| `oxygenSaturationPercent` | Min / media / max della saturazione, in percentuale (non in frazione). |
-| `nutrition` | Somma di energia, proteine, carboidrati e grassi dei pasti iniziati quel giorno. `mealCount` conta anche i pasti senza quei campi. |
-| `hydrationMilliliters` | Volume totale nel pezzo di giorno incluso nella finestra. |
+| `schemaVersion` | Always `1` in this app. |
+| `syncedAt` | Instant when the app built the JSON. |
+| `timezone` | The phone's `ZoneId`, for example `Europe/Rome`. |
+| `appVersion` | The app `versionName`. |
+| `historyLimited` | `true` when the window was shortened to Health Connect's 30-day limit. |
+| `window.start` / `window.end` | Range that was read. The end is exclusive. |
+| `days[]` | One object per local day that has at least one value. Empty days are omitted. `steps: 0` is kept, because zero is a real total. |
+| `heartRate` | Minimum, average, and maximum bpm, plus the sample count, from the Health Connect aggregate. |
+| `restingHeartRateBpm` | Average of that day's resting readings (`BPM_AVG`). |
+| `heartRateVariabilityRmssdMillis` | Min / average / max RMSSD, in milliseconds. |
+| `oxygenSaturationPercent` | Min / average / max saturation, as a percentage (not a fraction). |
+| `nutrition` | Sum of energy, protein, carbohydrate, and fat for meals that started that day. `mealCount` also counts meals that omit those fields. |
+| `hydrationMilliliters` | Total volume in the part of the day inside the window. |
 | `sleepSessions[].stages[].stage` | `awake`, `sleeping`, `out_of_bed`, `light`, `deep`, `rem`, `awake_in_bed`, `unknown`. |
-| `exerciseSessions[].exerciseType` | Nome in snake_case del tipo Health Connect. Vedi elenco sotto. Un codice futuro non mappato diventa `exercise_<numero>`. |
-| `unavailableMetrics` | Id non letti perché il permesso manca: `steps`, `distance`, `active_calories`, `total_calories`, `exercise_session`, `sleep_session`, `weight`, `body_fat`, `heart_rate`, `resting_heart_rate`, `heart_rate_variability`, `oxygen_saturation`, `nutrition`, `hydration`. |
+| `exerciseSessions[].exerciseType` | Health Connect exercise type in snake_case. See the list below. A future unmapped code becomes `exercise_<number>`. |
+| `unavailableMetrics` | Ids that were not read because permission was missing: `steps`, `distance`, `active_calories`, `total_calories`, `exercise_session`, `sleep_session`, `weight`, `body_fat`, `heart_rate`, `resting_heart_rate`, `heart_rate_variability`, `oxygen_saturation`, `nutrition`, `hydration`. |
 
-Tipi di allenamento: `other_workout`, `badminton`, `baseball`, `basketball`, `biking`, `biking_stationary`, `boot_camp`, `boxing`, `calisthenics`, `cricket`, `dancing`, `elliptical`, `exercise_class`, `fencing`, `football_american`, `football_australian`, `frisbee_disc`, `golf`, `guided_breathing`, `gymnastics`, `handball`, `high_intensity_interval_training`, `hiking`, `ice_hockey`, `ice_skating`, `martial_arts`, `paddling`, `paragliding`, `pilates`, `racquetball`, `rock_climbing`, `roller_hockey`, `rowing`, `rowing_machine`, `rugby`, `running`, `running_treadmill`, `sailing`, `scuba_diving`, `skating`, `skiing`, `snowboarding`, `snowshoeing`, `soccer`, `softball`, `squash`, `stair_climbing`, `stair_climbing_machine`, `strength_training`, `stretching`, `surfing`, `swimming_open_water`, `swimming_pool`, `table_tennis`, `tennis`, `volleyball`, `walking`, `water_polo`, `weightlifting`, `wheelchair`, `yoga`.
+Exercise types: `other_workout`, `badminton`, `baseball`, `basketball`, `biking`, `biking_stationary`, `boot_camp`, `boxing`, `calisthenics`, `cricket`, `dancing`, `elliptical`, `exercise_class`, `fencing`, `football_american`, `football_australian`, `frisbee_disc`, `golf`, `guided_breathing`, `gymnastics`, `handball`, `high_intensity_interval_training`, `hiking`, `ice_hockey`, `ice_skating`, `martial_arts`, `paddling`, `paragliding`, `pilates`, `racquetball`, `rock_climbing`, `roller_hockey`, `rowing`, `rowing_machine`, `rugby`, `running`, `running_treadmill`, `sailing`, `scuba_diving`, `skating`, `skiing`, `snowboarding`, `snowshoeing`, `soccer`, `softball`, `squash`, `stair_climbing`, `stair_climbing_machine`, `strength_training`, `stretching`, `surfing`, `swimming_open_water`, `swimming_pool`, `table_tennis`, `tennis`, `volleyball`, `walking`, `water_polo`, `weightlifting`, `wheelchair`, `yoga`.
 
-## Firma dell'APK
+## APK signing
 
-La build `release` è firmata con il keystore nel repository `keystore/salute-sync.jks` (alias `salutesync`, password store e chiave `salutesync`). È una chiave di sideload, pubblica di proposito, non una chiave da Play Store. Va bene per installare e aggiornare questa app fuori dallo store. Non va usata per pubblicare su Google Play.
+The `release` build is signed with the keystore in the repository, `keystore/salute-sync.jks` (alias `salutesync`, store password and key password `salutesync`). This is a sideload key, public on purpose, not a Play Store key. It is fine for installing and updating this app outside the store. Do not use it to publish on Google Play.
 
-`EncryptedSharedPreferences` è l'API richiesta per URL e chiave. Jetpack l'ha segnata come deprecata in `security-crypto` 1.1.0 e non ha un sostituto ufficiale: qui resta in uso, con una ricreazione del file se il keyset risulta illeggibile.
+`EncryptedSharedPreferences` is the API used for the URL and the key. Jetpack marked it deprecated in `security-crypto` 1.1.0 and has not shipped an official replacement. It stays in use here, and the preferences file is recreated if the keyset cannot be read.
 
-## Compilare in locale
+## Build locally
 
-Serve JDK 17 o successivo e Android SDK 37 (platform `android-37` / `android-37.0` e build-tools 37).
+You need JDK 17 or newer and Android SDK 37 (platform `android-37` / `android-37.0` and build-tools 37).
 
 ```bash
 export ANDROID_HOME="$HOME/android-sdk"
@@ -162,6 +164,6 @@ echo "sdk.dir=$ANDROID_HOME" > local.properties
 ./gradlew :app:testDebugUnitTest :app:assembleRelease
 ```
 
-L'APK è in `app/build/outputs/apk/release/salute-sync-release.apk`.
+The APK is at `app/build/outputs/apk/release/salute-sync-release.apk`.
 
-I test di unità coprono la costruzione del JSON (totali, sonno con fasi, peso, allenamenti, fuso `Europe/Rome`), la finestra dei 7 giorni e delle sync successive, l'orario delle 6:00, e la validazione di URL e header.
+Unit tests cover JSON construction (daily totals, sleep with stages, weight, workouts, `Europe/Rome`), the 7-day window and later syncs, the 06:00 schedule, and URL and header validation.
