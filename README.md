@@ -34,9 +34,11 @@ To update the app, install a newer APK signed with the same key over this one. U
 
 - `Content-Type: application/json; charset=utf-8`
 - The header name and value you configured (default name `Authorization`)
-- `User-Agent: SaluteSync/1.0.0`
+- `User-Agent: SaluteSync/1.1.0`
 
-The first sync covers the **last 7 days**. Later syncs start at the time of the last **successful** sync and run up to now. The range is `[start, end)`: a record that falls exactly on the end is included in the next sync, so it is neither duplicated nor dropped.
+The first sync, and the **Importa storico completo** button, import every readable record from the earliest available instant to now. With the history permission that start is 15 years ago. Without it, Health Connect only allows data from 30 days before the app was first granted read permission, and the screen says so in Italian. Later daily syncs start at the end of the last successful import. The range is `[start, end)`: a record that falls exactly on the end is included in the next sync, so it is neither duplicated nor dropped.
+
+History is posted as monthly chunks (`kind` is `backfill`). Each chunk carries `chunk.index`, `chunk.total`, and the chunk `start` / `end`. Progress is stored on the phone, so a failed chunk is retried without resending the ones that already succeeded. A chunk larger than about 1.5 MB is split into weeks, then days, before it is sent. Empty months are still posted so the index stays contiguous. After the import finishes, the daily job sends `kind` `incremental`.
 
 Daily totals (steps, distance, calories, heart rate, resting heart rate, hydration) come from Health Connect aggregation, and only for the slice of the day inside the window. Steps written by more than one source are not added twice. Heart-rate variability, oxygen, and nutrition are computed from the samples that were read. Sleep, weight, body fat, and workouts stay as individual events.
 
@@ -46,13 +48,14 @@ If Health Connect rejects a window that starts more than 30 days before the perm
 
 On a network error, or HTTP 408, 429, or 5xx, WorkManager retries with exponential backoff (minimum 15 minutes, up to 5 attempts in that cycle). A wrong URL or key (other 4xx) is not retried in a tight loop. The periodic sync stays scheduled either way.
 
-## JSON schema (version 1)
+## JSON schema (version 2)
 
-Null fields are omitted. Decimal numbers are rounded to 2 digits. Instants are ISO-8601 with the phone time-zone offset. `unavailableMetrics` lists ids that were not granted, in alphabetical order.
+Null fields are omitted. Decimal numbers are rounded to 2 digits. Instants are ISO-8601 with the phone time-zone offset. `unavailableMetrics` lists ids that were not granted, in alphabetical order. `kind` is `incremental` or `backfill`. `chunk` is present only for `backfill`.
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
+  "kind": "incremental",
   "syncedAt": "2026-01-17T06:00:00+01:00",
   "timezone": "Europe/Rome",
   "appVersion": "1.0.0",
@@ -129,7 +132,9 @@ Null fields are omitted. Decimal numbers are rounded to 2 digits. Instants are I
 
 | Field | Meaning |
 | --- | --- |
-| `schemaVersion` | Always `1` in this app. |
+| `schemaVersion` | `2` in this app. |
+| `kind` | `incremental` for the daily sync, `backfill` for a history chunk. |
+| `chunk` | For `backfill`: `index` (1-based), `total`, `start`, `end`. The end matches `window.end`. |
 | `syncedAt` | Instant when the app built the JSON. |
 | `timezone` | The phone's `ZoneId`, for example `Europe/Rome`. |
 | `appVersion` | The app `versionName`. |
@@ -142,9 +147,25 @@ Null fields are omitted. Decimal numbers are rounded to 2 digits. Instants are I
 | `oxygenSaturationPercent` | Min / average / max saturation, as a percentage (not a fraction). |
 | `nutrition` | Sum of energy, protein, carbohydrate, and fat for meals that started that day. `mealCount` also counts meals that omit those fields. |
 | `hydrationMilliliters` | Total volume in the part of the day inside the window. |
+| `floorsClimbed` | Floors climbed in that slice of the day. |
+| `elevationMeters` | Elevation gained, in meters. |
+| `wheelchairPushes` | Wheelchair push count. |
+| `speedMetersPerSecond` | Min / average / max speed. `sampleCount` is `0` because the aggregate does not report a count. |
+| `powerWatts` | Min / average / max power, in watts. `sampleCount` is `0`. |
+| `cyclingCadenceRpm` | Min / average / max pedaling cadence. Read with the exercise permission. |
+| `stepsCadencePerMinute` | Min / average / max step cadence. Read with the steps permission. |
+| `basalCaloriesKcal` | Basal calories burned that day. |
+| `heightReadings` | `{ time, value }` in meters. |
+| `leanBodyMassReadings`, `boneMassReadings`, `bodyWaterMassReadings` | `{ time, value }` in kilograms. |
+| `respiratoryRateReadings` | Breaths per minute. |
+| `basalMetabolicRateReadings` | Kilocalories per day at the sample time. |
+| `bodyTemperatureReadings`, `basalBodyTemperatureReadings` | `{ time, celsius, location }`. `location` is `armpit`, `finger`, `forehead`, `mouth`, `rectum`, `temporal_artery`, `toe`, `ear`, `wrist`, `vagina`, or `unknown`. |
+| `bloodPressureReadings` | `{ time, systolicMmHg, diastolicMmHg, bodyPosition, measurementLocation }`. Position: `standing`, `sitting`, `lying`, `reclining`, `unknown`. Location: `left_wrist`, `right_wrist`, `left_upper_arm`, `right_upper_arm`, `unknown`. |
+| `bloodGlucoseReadings` | `{ time, millimolesPerLiter, specimenSource, relationToMeal }`. |
+| `vo2MaxReadings` | `{ time, millilitersPerMinutePerKg, method }` where method is `metabolic_cart`, `heart_rate_ratio`, `cooper_test`, `multistage_fitness_test`, `rockport_fitness_test`, or `other`. |
 | `sleepSessions[].stages[].stage` | `awake`, `sleeping`, `out_of_bed`, `light`, `deep`, `rem`, `awake_in_bed`, `unknown`. |
 | `exerciseSessions[].exerciseType` | Health Connect exercise type in snake_case. See the list below. A future unmapped code becomes `exercise_<number>`. |
-| `unavailableMetrics` | Ids that were not read because permission was missing: `steps`, `distance`, `active_calories`, `total_calories`, `exercise_session`, `sleep_session`, `weight`, `body_fat`, `heart_rate`, `resting_heart_rate`, `heart_rate_variability`, `oxygen_saturation`, `nutrition`, `hydration`. |
+| `unavailableMetrics` | Ids that were not read because permission was missing: `steps`, `distance`, `floors`, `elevation`, `speed`, `power`, `active_calories`, `total_calories`, `basal_metabolic_rate`, `exercise_session`, `wheelchair_pushes`, `sleep_session`, `weight`, `body_fat`, `height`, `lean_body_mass`, `bone_mass`, `body_water_mass`, `heart_rate`, `resting_heart_rate`, `heart_rate_variability`, `oxygen_saturation`, `blood_pressure`, `blood_glucose`, `body_temperature`, `basal_body_temperature`, `respiratory_rate`, `vo2_max`, `nutrition`, `hydration`. |
 
 Exercise types: `other_workout`, `badminton`, `baseball`, `basketball`, `biking`, `biking_stationary`, `boot_camp`, `boxing`, `calisthenics`, `cricket`, `dancing`, `elliptical`, `exercise_class`, `fencing`, `football_american`, `football_australian`, `frisbee_disc`, `golf`, `guided_breathing`, `gymnastics`, `handball`, `high_intensity_interval_training`, `hiking`, `ice_hockey`, `ice_skating`, `martial_arts`, `paddling`, `paragliding`, `pilates`, `racquetball`, `rock_climbing`, `roller_hockey`, `rowing`, `rowing_machine`, `rugby`, `running`, `running_treadmill`, `sailing`, `scuba_diving`, `skating`, `skiing`, `snowboarding`, `snowshoeing`, `soccer`, `softball`, `squash`, `stair_climbing`, `stair_climbing_machine`, `strength_training`, `stretching`, `surfing`, `swimming_open_water`, `swimming_pool`, `table_tennis`, `tennis`, `volleyball`, `walking`, `water_polo`, `weightlifting`, `wheelchair`, `yoga`.
 

@@ -1,7 +1,11 @@
-# Salute Sync v1.0.0
+# Salute Sync v1.1.0
 
-First sideload build. The app reads Health Connect (including data Samsung Health syncs into it) and POSTs one JSON payload per day to a webhook you configure.
+Full history import. The first sync, and **Importa storico completo**, reads every supported Health Connect type from the earliest available data to now and POSTs it in monthly chunks.
 
-The phone UI is Italian. Install steps, the JSON schema, and the sideload signing key are in the [README](README.md#install-on-a-phone).
+Each history payload has `"kind": "backfill"` plus `chunk.index`, `chunk.total`, and the chunk start and end. Progress is saved on the phone, so a failed chunk can be retried without resending chunks that already succeeded. Chunks larger than about 1.5 MB are split into weeks, then days.
 
-Attach `salute-sync-1.0.0.apk` to this release. It is signed with the public sideload key documented in the README (`keystore/salute-sync.jks`, alias `salutesync`, password `salutesync`). That key is for installing and updating outside the Play Store, not for publishing there.
+The app requests `READ_HEALTH_DATA_HISTORY` when the device supports it. Without that permission, Health Connect only allows data from 30 days before the first read grant, and the Italian UI says so. Daily syncs after the import are `"kind": "incremental"`.
+
+Schema version is 2. New daily totals include floors, elevation, speed, power, cadence, wheelchair pushes, and basal calories. New readings include height, lean mass, bone mass, body water, temperature, basal temperature, blood pressure, blood glucose, respiratory rate, and VO2 max. Menstruation-related types are not read.
+
+Install steps and the public sideload key are in the [README](README.md#install-on-a-phone). This build is `versionCode` 2, signed with the same key as 1.0.0, so it updates over that install. Attach `salute-sync-1.1.0.apk`.

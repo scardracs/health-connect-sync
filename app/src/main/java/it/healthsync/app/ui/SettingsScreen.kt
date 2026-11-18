@@ -53,6 +53,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import it.healthsync.app.data.SyncStatus
+import it.healthsync.app.domain.HistoryRange
 import it.healthsync.app.health.HealthPermissions
 import java.time.Instant
 import java.time.ZoneId
@@ -64,6 +65,7 @@ fun SettingsScreen(viewModel: SettingsViewModel) {
     val context = LocalContext.current
     val snackbarHostState = remember { SnackbarHostState() }
     val sync by viewModel.syncState.collectAsStateWithLifecycle()
+    val backfill by viewModel.backfill.collectAsStateWithLifecycle()
     val health = viewModel.health.value
     val validation = viewModel.validation.value
     val syncing = viewModel.syncing.value
@@ -75,6 +77,9 @@ fun SettingsScreen(viewModel: SettingsViewModel) {
         PermissionController.createRequestPermissionResultContract(),
     ) { viewModel.refresh() }
     val backgroundPermissionLauncher = rememberLauncherForActivityResult(
+        PermissionController.createRequestPermissionResultContract(),
+    ) { viewModel.refresh() }
+    val historyPermissionLauncher = rememberLauncherForActivityResult(
         PermissionController.createRequestPermissionResultContract(),
     ) { viewModel.refresh() }
 
@@ -193,6 +198,28 @@ fun SettingsScreen(viewModel: SettingsViewModel) {
                                 )
                             }
                             Spacer(Modifier.height(8.dp))
+                            Text(historyCopy(health.history), style = MaterialTheme.typography.bodyMedium)
+                            if (health.history == BackgroundAccess.DENIED && health.missingLabels.isEmpty()) {
+                                Spacer(Modifier.height(8.dp))
+                                OutlinedButton(
+                                    onClick = {
+                                        try {
+                                            historyPermissionLauncher.launch(setOf(HealthPermissions.history))
+                                        } catch (_: Exception) {
+                                            viewModel.banner.value =
+                                                "Impossibile chiedere la lettura dello storico. Aggiorna Health Connect."
+                                        }
+                                    },
+                                    modifier = Modifier.fillMaxWidth(),
+                                ) { Text("Consenti lettura dello storico") }
+                            } else if (health.history == BackgroundAccess.DENIED) {
+                                Spacer(Modifier.height(8.dp))
+                                Text(
+                                    "Concedi prima tutti i permessi di lettura, poi la lettura dello storico.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                )
+                            }
+                            Spacer(Modifier.height(8.dp))
                             TextButton(
                                 onClick = { openHealthConnect(context) },
                                 modifier = Modifier.fillMaxWidth(),
@@ -266,6 +293,17 @@ fun SettingsScreen(viewModel: SettingsViewModel) {
                         Spacer(Modifier.height(6.dp))
                         Text(message, style = MaterialTheme.typography.bodyMedium)
                     }
+                    backfill?.let { plan ->
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            if (plan.finished) {
+                                "Storico completo importato (${plan.completed} blocchi)."
+                            } else {
+                                "Importazione storica: ${plan.completed} di ${plan.total} blocchi inviati."
+                            },
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                    }
                     Spacer(Modifier.height(10.dp))
                     Button(
                         onClick = viewModel::syncNow,
@@ -284,8 +322,14 @@ fun SettingsScreen(viewModel: SettingsViewModel) {
                         }
                     }
                     Spacer(Modifier.height(8.dp))
+                    OutlinedButton(
+                        onClick = viewModel::importHistory,
+                        enabled = !syncing,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text("Importa storico completo") }
+                    Spacer(Modifier.height(8.dp))
                     Text(
-                        "La sync automatica è prevista intorno alle 6:00 nel fuso del telefono ($zone). La prima invia gli ultimi 7 giorni; le successive, solo i dati nuovi. Android può ritardare il lavoro se il risparmio energetico è attivo.",
+                        "La prima sincronizzazione importa tutto lo storico disponibile, a blocchi mensili. Poi, ogni giorno intorno alle 6:00 ($zone), partono solo i dati nuovi. Senza il permesso di lettura dello storico il limite è ${HistoryRange.FALLBACK_DAYS} giorni prima della prima concessione. Android può ritardare il lavoro se il risparmio energetico è attivo.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -339,6 +383,16 @@ private fun statusLabel(status: SyncStatus): String = when (status) {
     SyncStatus.RUNNING -> "In corso"
     SyncStatus.SUCCESS -> "Riuscita"
     SyncStatus.FAILURE -> "Non riuscita"
+}
+
+private fun historyCopy(access: BackgroundAccess): String = when (access) {
+    BackgroundAccess.GRANTED ->
+        "Lettura dello storico concessa. L'importazione completa parte da ${HistoryRange.HORIZON_YEARS} anni fa, o da quando i dati esistono."
+    BackgroundAccess.DENIED ->
+        "Senza il permesso di lettura dello storico, Health Connect consente solo i dati da 30 giorni prima della prima concessione dei permessi. L'importazione userà quella finestra."
+    BackgroundAccess.UNSUPPORTED ->
+        "Questo dispositivo non supporta la lettura dello storico. L'importazione copre al massimo i 30 giorni precedenti la prima concessione dei permessi."
+    BackgroundAccess.UNKNOWN -> "Permesso di lettura dello storico non verificato."
 }
 
 private fun backgroundCopy(access: BackgroundAccess): String = when (access) {

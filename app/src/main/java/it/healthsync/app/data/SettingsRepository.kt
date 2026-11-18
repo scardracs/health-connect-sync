@@ -2,12 +2,19 @@ package it.healthsync.app.data
 
 import android.content.Context
 import android.content.SharedPreferences
+import it.healthsync.app.domain.BackfillState
 import it.healthsync.app.domain.DEFAULT_AUTH_HEADER
+import it.healthsync.app.domain.StoredBackfill
 import it.healthsync.app.domain.normalizeHeaderName
+import it.healthsync.app.domain.toState
+import it.healthsync.app.domain.toStored
 import java.time.Instant
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 
 enum class SyncStatus {
     NEVER,
@@ -32,8 +39,11 @@ data class SyncState(
 
 class SettingsRepository(context: Context) {
     private val prefs = SecureStore.open(context)
+    private val json = Json { ignoreUnknownKeys = true }
     private val _syncState = MutableStateFlow(readSyncState())
     val syncState: StateFlow<SyncState> = _syncState.asStateFlow()
+    private val _backfill = MutableStateFlow(readBackfill())
+    val backfill: StateFlow<BackfillState?> = _backfill.asStateFlow()
 
     private val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, _ ->
         _syncState.value = readSyncState()
@@ -61,6 +71,37 @@ class SettingsRepository(context: Context) {
 
     fun reload() {
         _syncState.value = readSyncState()
+        _backfill.value = readBackfill()
+    }
+
+    fun backfillState(): BackfillState? = readBackfill()
+
+    fun saveBackfill(state: BackfillState) {
+        prefs.edit().putString(KEY_BACKFILL, json.encodeToString(state.toStored())).commit()
+        _backfill.value = state
+    }
+
+    fun clearBackfill() {
+        prefs.edit().remove(KEY_BACKFILL).commit()
+        _backfill.value = null
+    }
+
+    fun rememberFirstGrant(now: Instant) {
+        if (prefs.contains(KEY_FIRST_GRANT)) return
+        prefs.edit().putLong(KEY_FIRST_GRANT, now.toEpochMilli()).commit()
+    }
+
+    fun firstGrant(): Instant? {
+        if (!prefs.contains(KEY_FIRST_GRANT)) return null
+        return Instant.ofEpochMilli(prefs.getLong(KEY_FIRST_GRANT, 0L))
+    }
+
+    fun noteProgress(now: Instant, message: String) {
+        prefs.edit()
+            .putLong(KEY_LAST_ATTEMPT, now.toEpochMilli())
+            .putString(KEY_MESSAGE, message)
+            .commit()
+        _syncState.value = readSyncState()
     }
 
     fun markSuccess(now: Instant, windowEnd: Instant, message: String, httpCode: Int) {
@@ -84,6 +125,11 @@ class SettingsRepository(context: Context) {
         _syncState.value = readSyncState()
     }
 
+    private fun readBackfill(): BackfillState? {
+        val raw = prefs.getString(KEY_BACKFILL, null) ?: return null
+        return runCatching { json.decodeFromString<StoredBackfill>(raw).toState() }.getOrNull()
+    }
+
     private fun readSyncState(): SyncState {
         val status = runCatching { SyncStatus.valueOf(prefs.getString(KEY_STATUS, SyncStatus.NEVER.name).orEmpty()) }
             .getOrDefault(SyncStatus.NEVER)
@@ -105,5 +151,7 @@ class SettingsRepository(context: Context) {
         private const val KEY_STATUS = "last_status"
         private const val KEY_MESSAGE = "last_message"
         private const val KEY_HTTP = "last_http_code"
+        private const val KEY_BACKFILL = "backfill_plan"
+        private const val KEY_FIRST_GRANT = "first_grant_epoch_ms"
     }
 }

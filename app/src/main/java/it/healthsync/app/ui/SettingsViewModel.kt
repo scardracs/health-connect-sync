@@ -7,6 +7,7 @@ import androidx.lifecycle.viewModelScope
 import it.healthsync.app.BuildConfig
 import it.healthsync.app.data.SettingsRepository
 import it.healthsync.app.data.SyncState
+import it.healthsync.app.domain.BackfillState
 import it.healthsync.app.domain.DEFAULT_AUTH_HEADER
 import it.healthsync.app.domain.SettingsValidation
 import it.healthsync.app.domain.validateWebhookSettings
@@ -29,6 +30,7 @@ data class HealthUi(
     val grantedLabels: List<String> = emptyList(),
     val missingLabels: List<String> = emptyList(),
     val background: BackgroundAccess = BackgroundAccess.UNKNOWN,
+    val history: BackgroundAccess = BackgroundAccess.UNKNOWN,
 )
 
 class SettingsViewModel(app: Application) : AndroidViewModel(app) {
@@ -42,6 +44,11 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
     )
 
     val appVersion: String = BuildConfig.VERSION_NAME
+    val backfill: StateFlow<BackfillState?> = settings.backfill.stateIn(
+        viewModelScope,
+        SharingStarted.WhileSubscribed(5_000),
+        settings.backfill.value,
+    )
     val syncState: StateFlow<SyncState> = settings.syncState.stateIn(
         viewModelScope,
         SharingStarted.WhileSubscribed(5_000),
@@ -78,17 +85,17 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
             }
             val granted = gateway.grantedPermissions()
             val missing = HealthPermissions.metrics.filter { it.permission !in granted }
-            val backgroundFeature = gateway.backgroundSupported()
-            val background = when {
-                !backgroundFeature -> BackgroundAccess.UNSUPPORTED
-                HealthPermissions.background in granted -> BackgroundAccess.GRANTED
-                else -> BackgroundAccess.DENIED
+            if (granted.any { it in HealthPermissions.readPermissions }) {
+                settings.rememberFirstGrant(java.time.Instant.now())
             }
+            val background = featureState(gateway.backgroundSupported(), HealthPermissions.background in granted)
+            val history = featureState(gateway.historySupported(), HealthPermissions.history in granted)
             health.value = HealthUi(
                 availability = availability,
                 grantedLabels = HealthPermissions.metrics.filter { it.permission in granted }.map { it.label },
                 missingLabels = missing.map { it.label },
                 background = background,
+                history = history,
             )
         }
     }
@@ -102,7 +109,11 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
         banner.value = "Impostazioni salvate sul telefono."
     }
 
-    fun syncNow() {
+    fun importHistory() = runSync { runner.importHistory(SyncOrigin.FOREGROUND) }
+
+    fun syncNow() = runSync { runner.sync(SyncOrigin.FOREGROUND) }
+
+    private fun runSync(block: suspend () -> SyncOutcome) {
         val result = validateWebhookSettings(url.value, headerName.value, headerValue.value)
         validation.value = result
         if (!result.ok) {
@@ -113,7 +124,7 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
         headerName.value = settings.webhook().headerName
         viewModelScope.launch {
             syncing.value = true
-            val outcome = runner.sync(SyncOrigin.FOREGROUND)
+            val outcome = block()
             syncing.value = false
             settings.reload()
             banner.value = when (outcome) {
@@ -126,5 +137,13 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
 
     fun consumeBanner() {
         banner.value = null
+    }
+
+    private fun featureState(supported: Boolean, granted: Boolean): BackgroundAccess {
+        return when {
+            !supported -> BackgroundAccess.UNSUPPORTED
+            granted -> BackgroundAccess.GRANTED
+            else -> BackgroundAccess.DENIED
+        }
     }
 }

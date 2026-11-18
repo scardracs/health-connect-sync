@@ -100,7 +100,9 @@ class PayloadBuilderTest {
         assertFalse(json.contains("Bearer"))
 
         val root = Json.parseToJsonElement(json).jsonObject
-        assertEquals(1, root.getValue("schemaVersion").jsonPrimitive.int)
+        assertEquals(2, root.getValue("schemaVersion").jsonPrimitive.int)
+        assertEquals("incremental", root.getValue("kind").jsonPrimitive.content)
+        assertFalse(root.containsKey("chunk"))
         assertEquals("Europe/Rome", root.getValue("timezone").jsonPrimitive.content)
         assertEquals("1.0.0", root.getValue("appVersion").jsonPrimitive.content)
         assertEquals("2026-01-17T06:00:00+01:00", root.getValue("syncedAt").jsonPrimitive.content)
@@ -201,6 +203,42 @@ class PayloadBuilderTest {
         assertTrue(payload.days.isEmpty())
         assertTrue(payload.sleepSessions.isEmpty())
         assertNull(payload.days.firstOrNull())
+    }
+
+    @Test
+    fun backfillChunkIsMarkedAndResumableByIndex() {
+        val snapshot = HealthSnapshot(
+            windowStart = start,
+            windowEnd = end,
+            zone = rome,
+            historyLimited = true,
+            daily = listOf(DailyMetrics(date = java.time.LocalDate.parse("2026-01-16"), floorsClimbed = 12.0)),
+        )
+        val payload = PayloadBuilder.build(
+            snapshot,
+            "1.1.0",
+            end,
+            kind = HealthPayload.KIND_BACKFILL,
+            chunkIndex = 2,
+            chunkTotal = 10,
+        )
+        assertEquals(HealthPayload.KIND_BACKFILL, payload.kind)
+        assertEquals(2, payload.chunk!!.index)
+        assertEquals(10, payload.chunk.total)
+        assertEquals("2026-01-16T06:00:00+01:00", payload.chunk.start)
+        assertEquals("2026-01-17T06:00:00+01:00", payload.chunk.end)
+        assertEquals(12.0, payload.days.single().floorsClimbed!!, 0.001)
+        assertTrue(payload.historyLimited)
+        val json = PayloadBuilder.buildJson(
+            snapshot,
+            "1.1.0",
+            end,
+            HealthPayload.KIND_BACKFILL,
+            2,
+            10,
+        )
+        assertTrue(json.contains("\"kind\":\"backfill\""))
+        assertFalse(json.contains(":null"))
     }
 
     @Test

@@ -4,9 +4,14 @@ import android.content.Context
 import android.util.Log
 import it.healthsync.app.BuildConfig
 import it.healthsync.app.data.SettingsRepository
+import it.healthsync.app.domain.BackfillPlanner
+import it.healthsync.app.domain.BackfillState
+import it.healthsync.app.domain.HealthPayload
+import it.healthsync.app.domain.HistoryRange
 import it.healthsync.app.domain.PayloadBuilder
 import it.healthsync.app.domain.SyncWindowResolver
 import it.healthsync.app.domain.validateWebhookSettings
+import it.healthsync.app.health.HealthPermissions
 import it.healthsync.app.health.HealthConnectGateway
 import it.healthsync.app.health.ReadOutcome
 import java.time.Instant
@@ -31,9 +36,14 @@ class SyncRunner(
     private val now: () -> Instant = Instant::now,
     private val zone: () -> ZoneId = { ZoneId.systemDefault() },
 ) {
-    suspend fun sync(origin: SyncOrigin): SyncOutcome = withContext(Dispatchers.IO) {
+    suspend fun sync(origin: SyncOrigin): SyncOutcome = locked(origin, restartHistory = false)
+
+    suspend fun importHistory(origin: SyncOrigin): SyncOutcome = locked(origin, restartHistory = true)
+
+    private suspend fun locked(origin: SyncOrigin, restartHistory: Boolean): SyncOutcome = withContext(Dispatchers.IO) {
         if (!mutex.tryLock()) return@withContext SyncOutcome.Busy
         try {
+            if (restartHistory) settings.clearBackfill()
             perform(origin)
         } finally {
             mutex.unlock()
@@ -53,6 +63,10 @@ class SyncRunner(
         }
         return try {
             val zoneId = zone()
+            val existing = settings.backfillState()
+            if (existing == null || !existing.finished) {
+                return backfill(origin, attemptAt, zoneId, config.url, config.headerName, config.headerValue, existing)
+            }
             val storedSuccess = settings.syncState.value.lastSuccess
             val window = SyncWindowResolver.resolve(storedSuccess, attemptAt)
             when (val read = gateway.read(window.start, window.end, zoneId, window.historyLimited)) {
@@ -88,6 +102,90 @@ class SyncRunner(
         }
     }
 
+    private suspend fun backfill(
+        origin: SyncOrigin,
+        attemptAt: Instant,
+        zoneId: java.time.ZoneId,
+        url: String,
+        headerName: String,
+        headerValue: String,
+        existing: BackfillState?,
+    ): SyncOutcome {
+        val granted = gateway.grantedPermissions()
+        if (granted.any { it in HealthPermissions.readPermissions }) {
+            settings.rememberFirstGrant(attemptAt)
+        }
+        var state = existing ?: run {
+            val historyGranted = gateway.historySupported() && HealthPermissions.history in granted
+            val start = HistoryRange.earliest(attemptAt, historyGranted, settings.firstGrant())
+            val chunks = BackfillPlanner.months(start, attemptAt, zoneId)
+            BackfillState(
+                chunks = chunks,
+                completed = 0,
+                historyLimited = !historyGranted,
+                finished = chunks.isEmpty(),
+            ).also { settings.saveBackfill(it) }
+        }
+        var lastCode = 0
+        while (state.chunks.isNotEmpty()) {
+            val window = state.chunks.first()
+            val index = state.completed + 1
+            val total = state.total
+            when (val read = gateway.read(window.start, window.end, zoneId, state.historyLimited, allowHistoryClamp = false)) {
+                is ReadOutcome.Unavailable -> return fail(attemptAt, read.message, retryable = false)
+                is ReadOutcome.PermissionDenied -> return fail(attemptAt, read.message, retryable = false)
+                is ReadOutcome.Ok -> {
+                    val body = PayloadBuilder.buildJson(
+                        read.snapshot,
+                        appVersion,
+                        attemptAt,
+                        kind = HealthPayload.KIND_BACKFILL,
+                        chunkIndex = index,
+                        chunkTotal = total,
+                    )
+                    val tooBig = body.toByteArray(Charsets.UTF_8).size > BackfillPlanner.MAX_CHUNK_BYTES
+                    val parts = if (tooBig) BackfillPlanner.split(window, zoneId) else emptyList()
+                    if (tooBig && parts.size > 1) {
+                        state = state.replaceFirst(parts)
+                        settings.saveBackfill(state)
+                        settings.noteProgress(attemptAt, "Un blocco dello storico è troppo grande: lo divido e riprovo.")
+                        continue
+                    }
+                    when (val posted = poster.post(url, headerName, headerValue, body)) {
+                        is PostResult.Ok -> {
+                            lastCode = posted.code
+                            state = state.advance()
+                            settings.saveBackfill(state)
+                            settings.noteProgress(
+                                attemptAt,
+                                "Storico: blocco $index di $total inviato.",
+                            )
+                        }
+                        is PostResult.HttpError -> {
+                            val base = "Il webhook ha risposto HTTP ${posted.code} durante l'importazione storica."
+                            return fail(attemptAt, withRetryHint(base, posted.retryable, origin), posted.retryable, posted.code)
+                        }
+                        is PostResult.NetworkError -> {
+                            return fail(
+                                attemptAt,
+                                withRetryHint("Connessione al webhook non riuscita durante l'importazione storica.", true, origin),
+                                retryable = true,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        val limited = if (state.historyLimited) {
+            " Senza il permesso di lettura dello storico la finestra parte da 30 giorni prima della prima concessione."
+        } else {
+            ""
+        }
+        val message = "Importazione storica completata: ${state.completed} blocchi.$limited"
+        settings.markSuccess(attemptAt, attemptAt, message, lastCode)
+        return SyncOutcome.Success(message, lastCode)
+    }
+
     private fun fail(now: Instant, message: String, retryable: Boolean, httpCode: Int? = null): SyncOutcome.Failure {
         settings.markFailure(now, message, httpCode)
         return SyncOutcome.Failure(message, retryable, httpCode)
@@ -109,7 +207,7 @@ class SyncRunner(
         }
 
         private fun successMessage(
-            payload: it.healthsync.app.domain.HealthPayload,
+            payload: HealthPayload,
             httpCode: Int,
             zone: ZoneId,
         ): String {

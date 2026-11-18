@@ -53,11 +53,11 @@ private fun PrivacyText() {
             )
             Text(
                 """
-                Salute Sync legge solo i dati che autorizzi in Health Connect: passi, distanza, calorie, allenamenti, sonno e fasi del sonno, peso, massa grassa, frequenza cardiaca, frequenza a riposo, variabilità cardiaca, saturazione dell'ossigeno, nutrizione e idratazione.
+                Salute Sync legge solo i dati che autorizzi in Health Connect: passi, distanza, piani, dislivello, velocità, potenza, calorie, allenamenti, sonno e fasi, peso e misure corporee, frequenza cardiaca, variabilità, ossigeno, pressione, glicemia, temperatura, respirazione, VO2 max, nutrizione e idratazione.
 
                 Una volta al giorno, o quando tocchi «Sincronizza ora», l'app invia un JSON all'indirizzo webhook che hai incollato tu. L'URL e la chiave restano sul telefono, cifrati. Non c'è un server di Salute Sync, né analisi, né tracker di terze parti.
 
-                Puoi revocare i permessi in qualsiasi momento da Health Connect. Senza il permesso di lettura in background, la sincronizzazione automatica a schermo spento non può leggere i dati: in quel caso usa «Sincronizza ora» con l'app aperta.
+                Puoi revocare i permessi in qualsiasi momento da Health Connect. Senza la lettura in background la sincronizzazione automatica a schermo spento non può leggere i dati. Senza la lettura dello storico l'importazione copre solo circa 30 giorni prima della prima concessione. In entrambi i casi puoi usare «Sincronizza ora» o «Importa storico completo» con l'app aperta.
                 """.trimIndent(),
                 modifier = Modifier.padding(top = 16.dp),
                 style = MaterialTheme.typography.bodyLarge,

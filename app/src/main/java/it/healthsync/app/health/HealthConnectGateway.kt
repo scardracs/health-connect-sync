@@ -5,20 +5,28 @@ import androidx.health.connect.client.HealthConnectClient
 import androidx.health.connect.client.HealthConnectFeatures
 import androidx.health.connect.client.aggregate.AggregateMetric
 import androidx.health.connect.client.records.ActiveCaloriesBurnedRecord
+import androidx.health.connect.client.records.BasalMetabolicRateRecord
 import androidx.health.connect.client.records.BodyFatRecord
+import androidx.health.connect.client.records.CyclingPedalingCadenceRecord
 import androidx.health.connect.client.records.DistanceRecord
+import androidx.health.connect.client.records.ElevationGainedRecord
 import androidx.health.connect.client.records.ExerciseSessionRecord
+import androidx.health.connect.client.records.FloorsClimbedRecord
 import androidx.health.connect.client.records.HeartRateRecord
 import androidx.health.connect.client.records.HeartRateVariabilityRmssdRecord
 import androidx.health.connect.client.records.HydrationRecord
 import androidx.health.connect.client.records.NutritionRecord
 import androidx.health.connect.client.records.OxygenSaturationRecord
+import androidx.health.connect.client.records.PowerRecord
 import androidx.health.connect.client.records.Record
 import androidx.health.connect.client.records.RestingHeartRateRecord
 import androidx.health.connect.client.records.SleepSessionRecord
+import androidx.health.connect.client.records.SpeedRecord
+import androidx.health.connect.client.records.StepsCadenceRecord
 import androidx.health.connect.client.records.StepsRecord
 import androidx.health.connect.client.records.TotalCaloriesBurnedRecord
 import androidx.health.connect.client.records.WeightRecord
+import androidx.health.connect.client.records.WheelchairPushesRecord
 import androidx.health.connect.client.request.AggregateRequest
 import androidx.health.connect.client.request.ReadRecordsRequest
 import androidx.health.connect.client.time.TimeRangeFilter
@@ -31,6 +39,7 @@ import it.healthsync.app.domain.NutritionSample
 import it.healthsync.app.domain.SleepSessionInput
 import it.healthsync.app.domain.SleepStageInput
 import it.healthsync.app.domain.TimedValue
+import it.healthsync.app.domain.TripleStat
 import it.healthsync.app.domain.WeightInput
 import it.healthsync.app.domain.datesOverlapping
 import java.time.Instant
@@ -64,17 +73,26 @@ class HealthConnectGateway(private val context: Context) {
         }
     }
 
-    fun backgroundSupported(): Boolean {
+    fun backgroundSupported(): Boolean = featureAvailable(HealthConnectFeatures.FEATURE_READ_HEALTH_DATA_IN_BACKGROUND)
+
+    fun historySupported(): Boolean = featureAvailable(HealthConnectFeatures.FEATURE_READ_HEALTH_DATA_HISTORY)
+
+    private fun featureAvailable(feature: Int): Boolean {
         val client = clientOrNull() ?: return false
         return try {
-            client.features.getFeatureStatus(HealthConnectFeatures.FEATURE_READ_HEALTH_DATA_IN_BACKGROUND) ==
-                HealthConnectFeatures.FEATURE_STATUS_AVAILABLE
+            client.features.getFeatureStatus(feature) == HealthConnectFeatures.FEATURE_STATUS_AVAILABLE
         } catch (_: Exception) {
             false
         }
     }
 
-    suspend fun read(windowStart: Instant, windowEnd: Instant, zone: ZoneId, historyLimited: Boolean = false): ReadOutcome {
+    suspend fun read(
+        windowStart: Instant,
+        windowEnd: Instant,
+        zone: ZoneId,
+        historyLimited: Boolean = false,
+        allowHistoryClamp: Boolean = true,
+    ): ReadOutcome {
         if (!windowStart.isBefore(windowEnd)) {
             return ReadOutcome.Ok(
                 HealthSnapshot(
@@ -90,7 +108,7 @@ class HealthConnectGateway(private val context: Context) {
         } catch (denied: AccessDenied) {
             denied.outcome
         } catch (e: Exception) {
-            if (!historyLimited && isHistoryLimit(e) && ChronoUnit.DAYS.between(windowStart, windowEnd) > 30) {
+            if (allowHistoryClamp && !historyLimited && isHistoryLimit(e) && ChronoUnit.DAYS.between(windowStart, windowEnd) > 30) {
                 val clamped = windowEnd.minus(30, ChronoUnit.DAYS)
                 if (clamped.isAfter(windowStart)) {
                     return read(clamped, windowEnd, zone, historyLimited = true)
@@ -196,6 +214,7 @@ class HealthConnectGateway(private val context: Context) {
         } else {
             emptyList()
         }
+        val points = readPointRecords(client, grantedIds, windowStart, windowEnd)
 
         return ReadOutcome.Ok(
             HealthSnapshot(
@@ -211,6 +230,17 @@ class HealthConnectGateway(private val context: Context) {
                 weight = weight,
                 bodyFat = bodyFat,
                 exercise = exercise,
+                heightMeters = points.heightMeters,
+                leanBodyMassKg = points.leanBodyMassKg,
+                boneMassKg = points.boneMassKg,
+                bodyWaterMassKg = points.bodyWaterMassKg,
+                respiratoryRate = points.respiratoryRate,
+                basalMetabolicRateKcalPerDay = points.basalMetabolicRateKcalPerDay,
+                bodyTemperature = points.bodyTemperature,
+                basalBodyTemperature = points.basalBodyTemperature,
+                bloodPressure = points.bloodPressure,
+                bloodGlucose = points.bloodGlucose,
+                vo2Max = points.vo2Max,
                 unavailableMetrics = unavailable,
             ),
         )
@@ -243,6 +273,30 @@ class HealthConnectGateway(private val context: Context) {
             }
             if ("resting_heart_rate" in grantedIds) metrics += RestingHeartRateRecord.BPM_AVG
             if ("hydration" in grantedIds) metrics += HydrationRecord.VOLUME_TOTAL
+            if ("floors" in grantedIds) metrics += FloorsClimbedRecord.FLOORS_CLIMBED_TOTAL
+            if ("elevation" in grantedIds) metrics += ElevationGainedRecord.ELEVATION_GAINED_TOTAL
+            if ("wheelchair_pushes" in grantedIds) metrics += WheelchairPushesRecord.COUNT_TOTAL
+            if ("speed" in grantedIds) {
+                metrics += SpeedRecord.SPEED_MIN
+                metrics += SpeedRecord.SPEED_AVG
+                metrics += SpeedRecord.SPEED_MAX
+            }
+            if ("power" in grantedIds) {
+                metrics += PowerRecord.POWER_MIN
+                metrics += PowerRecord.POWER_AVG
+                metrics += PowerRecord.POWER_MAX
+            }
+            if ("exercise_session" in grantedIds) {
+                metrics += CyclingPedalingCadenceRecord.RPM_MIN
+                metrics += CyclingPedalingCadenceRecord.RPM_AVG
+                metrics += CyclingPedalingCadenceRecord.RPM_MAX
+            }
+            if ("steps" in grantedIds) {
+                metrics += StepsCadenceRecord.RATE_MIN
+                metrics += StepsCadenceRecord.RATE_AVG
+                metrics += StepsCadenceRecord.RATE_MAX
+            }
+            if ("basal_metabolic_rate" in grantedIds) metrics += BasalMetabolicRateRecord.BASAL_CALORIES_TOTAL
             if (metrics.isEmpty()) continue
             val result = try {
                 client.aggregate(AggregateRequest(metrics, TimeRangeFilter.between(from, to)))
@@ -278,6 +332,54 @@ class HealthConnectGateway(private val context: Context) {
                 restingHeartRateBpm = if ("resting_heart_rate" in grantedIds) result[RestingHeartRateRecord.BPM_AVG] else null,
                 hydrationMilliliters = if ("hydration" in grantedIds) {
                     result[HydrationRecord.VOLUME_TOTAL]?.inMilliliters
+                } else {
+                    null
+                },
+                floorsClimbed = if ("floors" in grantedIds) result[FloorsClimbedRecord.FLOORS_CLIMBED_TOTAL] else null,
+                elevationMeters = if ("elevation" in grantedIds) {
+                    result[ElevationGainedRecord.ELEVATION_GAINED_TOTAL]?.inMeters
+                } else {
+                    null
+                },
+                wheelchairPushes = if ("wheelchair_pushes" in grantedIds) result[WheelchairPushesRecord.COUNT_TOTAL] else null,
+                speedMetersPerSecond = if ("speed" in grantedIds) {
+                    triple(
+                        result[SpeedRecord.SPEED_MIN]?.inMetersPerSecond,
+                        result[SpeedRecord.SPEED_AVG]?.inMetersPerSecond,
+                        result[SpeedRecord.SPEED_MAX]?.inMetersPerSecond,
+                    )
+                } else {
+                    null
+                },
+                powerWatts = if ("power" in grantedIds) {
+                    triple(
+                        result[PowerRecord.POWER_MIN]?.inWatts,
+                        result[PowerRecord.POWER_AVG]?.inWatts,
+                        result[PowerRecord.POWER_MAX]?.inWatts,
+                    )
+                } else {
+                    null
+                },
+                cyclingCadenceRpm = if ("exercise_session" in grantedIds) {
+                    triple(
+                        result[CyclingPedalingCadenceRecord.RPM_MIN],
+                        result[CyclingPedalingCadenceRecord.RPM_AVG],
+                        result[CyclingPedalingCadenceRecord.RPM_MAX],
+                    )
+                } else {
+                    null
+                },
+                stepsCadencePerMinute = if ("steps" in grantedIds) {
+                    triple(
+                        result[StepsCadenceRecord.RATE_MIN],
+                        result[StepsCadenceRecord.RATE_AVG],
+                        result[StepsCadenceRecord.RATE_MAX],
+                    )
+                } else {
+                    null
+                },
+                basalCaloriesKcal = if ("basal_metabolic_rate" in grantedIds) {
+                    result[BasalMetabolicRateRecord.BASAL_CALORIES_TOTAL]?.inKilocalories
                 } else {
                     null
                 },
@@ -337,7 +439,7 @@ class HealthConnectGateway(private val context: Context) {
         }
     }
 
-    private suspend inline fun <reified T : Record> readAll(
+    internal suspend inline fun <reified T : Record> readAll(
         client: HealthConnectClient,
         start: Instant,
         end: Instant,
@@ -363,25 +465,31 @@ class HealthConnectGateway(private val context: Context) {
         } while (!pageToken.isNullOrEmpty())
         return out
     }
+
+    private fun triple(min: Double?, avg: Double?, max: Double?): TripleStat? {
+        if (min == null && avg == null && max == null) return null
+        val present = listOfNotNull(min, avg, max)
+        return TripleStat(min = present.min(), avg = avg ?: present.average(), max = present.max())
+    }
 }
 
-private class AccessDenied(val outcome: ReadOutcome) : RuntimeException(outcome.toString())
+internal class AccessDenied(val outcome: ReadOutcome) : RuntimeException(outcome.toString())
 
-private fun throwIfDenied(error: Exception) {
+internal fun throwIfDenied(error: Exception) {
     val denied = generateSequence<Throwable>(error) { it.cause }.any { it is SecurityException }
     if (denied || isBackgroundDenial(error)) {
         throw AccessDenied(ReadOutcome.PermissionDenied(permissionDeniedMessage(error)))
     }
 }
 
-private fun isBackgroundDenial(error: Throwable): Boolean {
+internal fun isBackgroundDenial(error: Throwable): Boolean {
     val text = generateSequence(error) { it.cause }
         .mapNotNull { it.message }
         .joinToString(" ")
     return text.contains("background", ignoreCase = true)
 }
 
-private fun permissionDeniedMessage(error: Throwable): String {
+internal fun permissionDeniedMessage(error: Throwable): String {
     return if (isBackgroundDenial(error)) {
         "Lettura in background non consentita. Concedi il permesso di lettura in background, oppure tieni aperta l'app e usa Sincronizza ora."
     } else {
@@ -389,7 +497,7 @@ private fun permissionDeniedMessage(error: Throwable): String {
     }
 }
 
-private fun isHistoryLimit(error: Throwable): Boolean {
+internal fun isHistoryLimit(error: Throwable): Boolean {
     val text = generateSequence(error) { it.cause }
         .mapNotNull { it.message }
         .joinToString(" ")

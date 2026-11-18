@@ -64,6 +64,39 @@ data class ExerciseInput(
  * the calendar day and the sync window. Null means the metric was not read
  * or Health Connect had no samples.
  */
+data class TripleStat(
+    val min: Double,
+    val avg: Double,
+    val max: Double,
+)
+
+data class TemperatureInput(
+    val time: Instant,
+    val celsius: Double,
+    val location: String,
+)
+
+data class BloodPressureInput(
+    val time: Instant,
+    val systolicMmHg: Double,
+    val diastolicMmHg: Double,
+    val bodyPosition: String,
+    val measurementLocation: String,
+)
+
+data class GlucoseInput(
+    val time: Instant,
+    val millimolesPerLiter: Double,
+    val specimenSource: String,
+    val relationToMeal: String,
+)
+
+data class Vo2Input(
+    val time: Instant,
+    val millilitersPerMinutePerKg: Double,
+    val method: String,
+)
+
 data class DailyMetrics(
     val date: LocalDate,
     val steps: Long? = null,
@@ -73,6 +106,14 @@ data class DailyMetrics(
     val heartRate: BpmStats? = null,
     val restingHeartRateBpm: Long? = null,
     val hydrationMilliliters: Double? = null,
+    val floorsClimbed: Double? = null,
+    val elevationMeters: Double? = null,
+    val wheelchairPushes: Long? = null,
+    val speedMetersPerSecond: TripleStat? = null,
+    val powerWatts: TripleStat? = null,
+    val cyclingCadenceRpm: TripleStat? = null,
+    val stepsCadencePerMinute: TripleStat? = null,
+    val basalCaloriesKcal: Double? = null,
 )
 
 data class HealthSnapshot(
@@ -88,12 +129,25 @@ data class HealthSnapshot(
     val weight: List<WeightInput> = emptyList(),
     val bodyFat: List<BodyFatInput> = emptyList(),
     val exercise: List<ExerciseInput> = emptyList(),
+    val heightMeters: List<TimedValue> = emptyList(),
+    val leanBodyMassKg: List<TimedValue> = emptyList(),
+    val boneMassKg: List<TimedValue> = emptyList(),
+    val bodyWaterMassKg: List<TimedValue> = emptyList(),
+    val respiratoryRate: List<TimedValue> = emptyList(),
+    val basalMetabolicRateKcalPerDay: List<TimedValue> = emptyList(),
+    val bodyTemperature: List<TemperatureInput> = emptyList(),
+    val basalBodyTemperature: List<TemperatureInput> = emptyList(),
+    val bloodPressure: List<BloodPressureInput> = emptyList(),
+    val bloodGlucose: List<GlucoseInput> = emptyList(),
+    val vo2Max: List<Vo2Input> = emptyList(),
     val unavailableMetrics: List<String> = emptyList(),
 )
 
 @Serializable
 data class HealthPayload(
     val schemaVersion: Int = SCHEMA_VERSION,
+    val kind: String = KIND_INCREMENTAL,
+    val chunk: ChunkDto? = null,
     val syncedAt: String,
     val timezone: String,
     val appVersion: String,
@@ -104,12 +158,33 @@ data class HealthPayload(
     val weightReadings: List<WeightReadingDto>,
     val bodyFatReadings: List<BodyFatReadingDto>,
     val exerciseSessions: List<ExerciseSessionDto>,
+    val heightReadings: List<ScalarReadingDto> = emptyList(),
+    val leanBodyMassReadings: List<ScalarReadingDto> = emptyList(),
+    val boneMassReadings: List<ScalarReadingDto> = emptyList(),
+    val bodyWaterMassReadings: List<ScalarReadingDto> = emptyList(),
+    val respiratoryRateReadings: List<ScalarReadingDto> = emptyList(),
+    val basalMetabolicRateReadings: List<ScalarReadingDto> = emptyList(),
+    val bodyTemperatureReadings: List<TemperatureReadingDto> = emptyList(),
+    val basalBodyTemperatureReadings: List<TemperatureReadingDto> = emptyList(),
+    val bloodPressureReadings: List<BloodPressureReadingDto> = emptyList(),
+    val bloodGlucoseReadings: List<GlucoseReadingDto> = emptyList(),
+    val vo2MaxReadings: List<Vo2ReadingDto> = emptyList(),
     val unavailableMetrics: List<String> = emptyList(),
 ) {
     companion object {
-        const val SCHEMA_VERSION = 1
+        const val SCHEMA_VERSION = 2
+        const val KIND_INCREMENTAL = "incremental"
+        const val KIND_BACKFILL = "backfill"
     }
 }
+
+@Serializable
+data class ChunkDto(
+    val index: Int,
+    val total: Int,
+    val start: String,
+    val end: String,
+)
 
 @Serializable
 data class TimeWindowDto(
@@ -155,6 +230,14 @@ data class DaySummaryDto(
     val oxygenSaturationPercent: DoubleStats? = null,
     val nutrition: NutritionDayDto? = null,
     val hydrationMilliliters: Double? = null,
+    val floorsClimbed: Double? = null,
+    val elevationMeters: Double? = null,
+    val wheelchairPushes: Long? = null,
+    val speedMetersPerSecond: DoubleStats? = null,
+    val powerWatts: DoubleStats? = null,
+    val cyclingCadenceRpm: DoubleStats? = null,
+    val stepsCadencePerMinute: DoubleStats? = null,
+    val basalCaloriesKcal: Double? = null,
 )
 
 @Serializable
@@ -185,6 +268,43 @@ data class WeightReadingDto(
 data class BodyFatReadingDto(
     val time: String,
     val percentage: Double,
+)
+
+@Serializable
+data class ScalarReadingDto(
+    val time: String,
+    val value: Double,
+)
+
+@Serializable
+data class TemperatureReadingDto(
+    val time: String,
+    val celsius: Double,
+    val location: String,
+)
+
+@Serializable
+data class BloodPressureReadingDto(
+    val time: String,
+    val systolicMmHg: Double,
+    val diastolicMmHg: Double,
+    val bodyPosition: String,
+    val measurementLocation: String,
+)
+
+@Serializable
+data class GlucoseReadingDto(
+    val time: String,
+    val millimolesPerLiter: Double,
+    val specimenSource: String,
+    val relationToMeal: String,
+)
+
+@Serializable
+data class Vo2ReadingDto(
+    val time: String,
+    val millilitersPerMinutePerKg: Double,
+    val method: String,
 )
 
 @Serializable
