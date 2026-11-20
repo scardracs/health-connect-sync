@@ -1,11 +1,8 @@
 package it.healthsync.app.ui
 
-import android.content.ActivityNotFoundException
 import android.content.Context
-import android.content.Intent
-import android.net.Uri
+import android.os.Build
 import android.os.PowerManager
-import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.appcompat.app.AppCompatDelegate
 import androidx.compose.foundation.layout.Arrangement
@@ -51,7 +48,6 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.core.os.LocaleListCompat
-import androidx.health.connect.client.HealthConnectClient
 import androidx.health.connect.client.PermissionController
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -59,6 +55,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import it.healthsync.app.R
 import it.healthsync.app.data.SyncStatus
+import it.healthsync.app.domain.ExternalScreens
 import it.healthsync.app.domain.FieldError
 import it.healthsync.app.domain.ItalianDates
 import it.healthsync.app.domain.SendPlan
@@ -500,49 +497,22 @@ private fun setLanguage(tag: String) {
 }
 
 private fun openHealthConnect(context: Context) {
-    val manage = Intent("android.health.connect.action.MANAGE_HEALTH_PERMISSIONS")
-        .putExtra(Intent.EXTRA_PACKAGE_NAME, context.packageName)
-        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-    try {
-        context.startActivity(manage)
-        return
-    } catch (_: ActivityNotFoundException) {
-        // Fall through to the Health Connect home screen.
-    }
-    val home = Intent(HealthConnectClient.ACTION_HEALTH_CONNECT_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-    try {
-        context.startActivity(home)
-    } catch (_: ActivityNotFoundException) {
-        openHealthConnectInstall(context)
+    val steps = ExternalScreens.healthPermissionSteps(context.packageName, Build.VERSION.SDK_INT)
+    if (ExternalScreens.launchFirst(steps) { context.startExternal(it) } == null) {
+        context.toast(R.string.open_health_failed)
     }
 }
 
 private fun openHealthConnectInstall(context: Context) {
-    val market = Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=com.google.android.apps.healthdata"))
-        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-    try {
-        context.startActivity(market)
-    } catch (_: ActivityNotFoundException) {
-        context.startActivity(
-            Intent(
-                Intent.ACTION_VIEW,
-                Uri.parse("https://play.google.com/store/apps/details?id=com.google.android.apps.healthdata"),
-            ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-        )
+    val steps = ExternalScreens.healthInstallSteps(context.packageName)
+    if (ExternalScreens.launchFirst(steps) { context.startExternal(it) } == null) {
+        context.toast(R.string.open_health_failed)
     }
 }
 
 private fun requestBatteryExemption(context: Context) {
-    val request = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
-        data = Uri.parse("package:${context.packageName}")
-    }
-    try {
-        context.startActivity(request)
-    } catch (_: ActivityNotFoundException) {
-        try {
-            context.startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
-        } catch (_: Exception) {
-            // The sync help text still explains that Android may delay background work.
-        }
+    val steps = ExternalScreens.batterySteps(context.packageName)
+    if (ExternalScreens.launchFirst(steps) { context.startExternal(it) } == null) {
+        context.toast(R.string.open_battery_failed)
     }
 }

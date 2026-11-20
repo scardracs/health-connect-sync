@@ -76,6 +76,8 @@
     <string name="grant_history_failed">Impossibile chiedere la lettura dello storico. Aggiorna Health Connect.</string>
     <string name="grant_history_first">Concedi prima tutti i permessi di lettura, poi la lettura dello storico.</string>
     <string name="open_health_connect">Apri le impostazioni di Health Connect</string>
+    <string name="open_health_failed">Impossibile aprire Health Connect.</string>
+    <string name="open_battery_failed">Impossibile aprire le impostazioni della batteria.</string>
     <string name="background_granted">Lettura in background concessa: la sync delle 6:00 può leggere i dati a schermo spento.</string>
     <string name="background_denied">Lettura in background non concessa. Senza questo permesso la sync automatica non legge i dati.</string>
     <string name="background_unsupported">Lettura in background non supportata su questo dispositivo. Usa Sincronizza ora con l\'app aperta.</string>

@@ -1,7 +1,7 @@
-# Salute Sync v1.3.0
+# Salute Sync v1.3.1
 
-The phone UI can be Italian or English. Italian is the default. Change it in Settings; it applies immediately and is remembered. Dates shown in the app use DD-MM-YYYY (and DD-MM-YYYY HH:mm when a time is included). Dates inside the webhook JSON stay ISO `yyyy-MM-dd`.
+Fixes a crash on Android 14 and later, including Samsung phones where Health Connect lives in system settings. Tapping "Open Health Connect settings" started `android.health.connect.action.MANAGE_HEALTH_PERMISSIONS` with `FLAG_ACTIVITY_NEW_TASK` and only caught `ActivityNotFoundException`. On those phones the activity is not exported to an implicit start, so `startActivity` throws `SecurityException` and the app closed.
 
-Settings now holds the language, the webhook URL and masked key (same stored fields as before), and the Health Connect read permissions, including a per-type granted status, a request button, and a shortcut to Health Connect. The main screen keeps sync status, Sync now, and Reimport history, plus a short notice when the webhook or permissions are missing.
+The button now tries, in order: the Android 14 permission screen (`HealthConnectManager.ACTION_MANAGE_HEALTH_PERMISSIONS` with `EXTRA_PACKAGE_NAME`, from the calling activity, then the resolved component), `HealthConnectClient.getHealthConnectManageDataIntent`, the Health Connect settings action, the Play Store page for Health Connect, and this app's system details screen. Every launch is caught. If nothing opens, a short toast is shown in the current language. The same guard covers the Health Connect install button and the battery-optimization button.
 
-Payload schema v3, the 3,500-byte cap, and the 60-second send gap are unchanged. `versionCode` 4, same sideload key as previous builds. Install steps are in the [README](README.md#install-on-a-phone). Attach `salute-sync-1.3.0.apk`.
+`versionCode` 5, same sideload key as 1.3.0. Payload schema v3 is unchanged. Attach `salute-sync-1.3.1.apk`.

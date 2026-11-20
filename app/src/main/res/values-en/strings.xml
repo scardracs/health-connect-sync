@@ -76,6 +76,8 @@
     <string name="grant_history_failed">Could not ask for history read. Update Health Connect.</string>
     <string name="grant_history_first">Grant all read permissions first, then history read.</string>
     <string name="open_health_connect">Open Health Connect settings</string>
+    <string name="open_health_failed">Couldn\'t open Health Connect.</string>
+    <string name="open_battery_failed">Couldn\'t open battery settings.</string>
     <string name="background_granted">Background read is allowed: the 06:00 sync can read while the screen is off.</string>
     <string name="background_denied">Background read is not allowed. Without it the automatic sync cannot read data.</string>
     <string name="background_unsupported">Background read is not supported on this device. Use Sync now while the app is open.</string>
