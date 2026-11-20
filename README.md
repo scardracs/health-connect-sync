@@ -13,7 +13,7 @@ The phone UI defaults to Italian and can be switched to English in Settings. Dat
 
 ## Install on a phone
 
-The sideload APK is signed (see below). Version 1.3.1 is `salute-sync-1.3.1.apk`. Webhook URL, header, and key are on the Settings screen. The main screen shows sync status and a short notice if the webhook or Health Connect permissions are missing.
+The sideload APK is signed (see below). Version 1.3.2 is `salute-sync-1.3.2.apk`. Webhook URL, header, and key are on the Settings screen. The main screen shows sync status and a short notice if the webhook or Health Connect permissions are missing.
 
 1. Copy the APK to the phone (Drive, email, cable, or download it in the browser).
 2. Open it. If Android blocks the install, allow **Install unknown apps** for the app you are opening it from (Chrome, Files, Gmail, and so on). On Android 8 and later this permission is per app, not a global switch: Settings → Apps → the app used to open the file → Install unknown apps.
@@ -34,7 +34,7 @@ To update the app, install a newer APK signed with the same key over this one. U
 
 - `Content-Type: application/json; charset=utf-8`
 - The header name and value you configured (default name `Authorization`)
-- `User-Agent: SaluteSync/1.3.1`
+- `User-Agent: SaluteSync/1.3.2`
 
 Every POST body is at most **3,500 bytes**. Requests are sent **one at a time**, with at least **60 seconds** between them (the pause can be raised in the app, not lowered). WorkManager keeps the queue going in the background. Progress is stored on the phone, so a failure resumes at the next unsent day.
 

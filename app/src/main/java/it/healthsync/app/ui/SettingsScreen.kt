@@ -114,33 +114,38 @@ fun SaluteApp(viewModel: SettingsViewModel) {
                 onBattery = { requestBatteryExemption(context) },
                 modifier = Modifier.padding(padding),
             )
-            Page.Settings -> SettingsPage(
-                viewModel = viewModel,
-                onBack = { page = Page.Home },
-                onGrantRead = {
-                    try {
-                        readPermissionLauncher.launch(HealthPermissions.readPermissions)
-                    } catch (_: Exception) {
-                        viewModel.banner.value = context.getString(R.string.grant_read_failed)
-                    }
-                },
-                onGrantBackground = {
-                    try {
-                        backgroundPermissionLauncher.launch(setOf(HealthPermissions.background))
-                    } catch (_: Exception) {
-                        viewModel.banner.value = context.getString(R.string.grant_background_failed)
-                    }
-                },
-                onGrantHistory = {
-                    try {
-                        historyPermissionLauncher.launch(setOf(HealthPermissions.history))
-                    } catch (_: Exception) {
-                        viewModel.banner.value = context.getString(R.string.grant_history_failed)
-                    }
-                },
-                onOpenHealthConnect = { openHealthConnect(context) },
-                modifier = Modifier.padding(padding),
-            )
+            Page.Settings -> {
+                val grantReadFailed = stringResource(R.string.grant_read_failed)
+                val grantBackgroundFailed = stringResource(R.string.grant_background_failed)
+                val grantHistoryFailed = stringResource(R.string.grant_history_failed)
+                SettingsPage(
+                    viewModel = viewModel,
+                    onBack = { page = Page.Home },
+                    onGrantRead = {
+                        try {
+                            readPermissionLauncher.launch(HealthPermissions.readPermissions)
+                        } catch (_: Exception) {
+                            viewModel.banner.value = grantReadFailed
+                        }
+                    },
+                    onGrantBackground = {
+                        try {
+                            backgroundPermissionLauncher.launch(setOf(HealthPermissions.background))
+                        } catch (_: Exception) {
+                            viewModel.banner.value = grantBackgroundFailed
+                        }
+                    },
+                    onGrantHistory = {
+                        try {
+                            historyPermissionLauncher.launch(setOf(HealthPermissions.history))
+                        } catch (_: Exception) {
+                            viewModel.banner.value = grantHistoryFailed
+                        }
+                    },
+                    onOpenHealthConnect = { openHealthConnect(context) },
+                    modifier = Modifier.padding(padding),
+                )
+            }
         }
     }
 }
