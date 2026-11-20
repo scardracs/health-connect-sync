@@ -4,6 +4,20 @@ import java.net.URI
 
 const val DEFAULT_AUTH_HEADER = "Authorization"
 
+object FieldError {
+    const val URL_REQUIRED = "url_required"
+    const val URL_TOO_LONG = "url_too_long"
+    const val URL_WHITESPACE = "url_whitespace"
+    const val URL_INVALID = "url_invalid"
+    const val URL_SCHEME = "url_scheme"
+    const val URL_HOST = "url_host"
+    const val HEADER_NAME_TOO_LONG = "header_name_too_long"
+    const val HEADER_NAME_INVALID = "header_name_invalid"
+    const val HEADER_VALUE_REQUIRED = "header_value_required"
+    const val HEADER_VALUE_TOO_LONG = "header_value_too_long"
+    const val HEADER_VALUE_NEWLINE = "header_value_newline"
+}
+
 data class SettingsValidation(
     val urlError: String?,
     val headerNameError: String?,
@@ -31,38 +45,38 @@ fun isRetryableHttpStatus(code: Int): Boolean {
 
 private fun validateUrl(raw: String): String? {
     val url = raw.trim()
-    if (url.isEmpty()) return "Inserisci l'URL del webhook."
-    if (url.length > 2048) return "L'URL è troppo lungo."
-    if (url.any { it.isWhitespace() }) return "L'URL non può contenere spazi."
+    if (url.isEmpty()) return FieldError.URL_REQUIRED
+    if (url.length > 2048) return FieldError.URL_TOO_LONG
+    if (url.any { it.isWhitespace() }) return FieldError.URL_WHITESPACE
     val uri = try {
         URI(url)
     } catch (_: Exception) {
-        return "L'URL non è valido."
+        return FieldError.URL_INVALID
     }
     val scheme = uri.scheme?.lowercase()
     if (scheme != "https" && scheme != "http") {
-        return "L'URL deve iniziare con https:// o http://."
+        return FieldError.URL_SCHEME
     }
-    if (uri.host.isNullOrBlank()) return "L'URL non contiene un host."
+    if (uri.host.isNullOrBlank()) return FieldError.URL_HOST
     return null
 }
 
 private val headerToken = Regex("^[!#$%&'*+.^_`|~0-9A-Za-z-]+$")
 
 private fun validateHeaderName(name: String): String? {
-    if (name.length > 128) return "Il nome dell'header è troppo lungo."
+    if (name.length > 128) return FieldError.HEADER_NAME_TOO_LONG
     if (!headerToken.matches(name)) {
-        return "Il nome dell'header contiene caratteri non validi."
+        return FieldError.HEADER_NAME_INVALID
     }
     return null
 }
 
 private fun validateHeaderValue(raw: String): String? {
     val value = raw.trim()
-    if (value.isEmpty()) return "Inserisci la chiave da inviare nell'header."
-    if (value.length > 4096) return "La chiave è troppo lunga."
+    if (value.isEmpty()) return FieldError.HEADER_VALUE_REQUIRED
+    if (value.length > 4096) return FieldError.HEADER_VALUE_TOO_LONG
     if (value.any { it == '\r' || it == '\n' }) {
-        return "La chiave non può andare a capo."
+        return FieldError.HEADER_VALUE_NEWLINE
     }
     return null
 }

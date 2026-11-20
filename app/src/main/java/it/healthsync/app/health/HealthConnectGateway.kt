@@ -114,7 +114,7 @@ class HealthConnectGateway(private val context: Context) {
                     return read(clamped, windowEnd, zone, historyLimited = true)
                 }
             }
-            ReadOutcome.Unavailable("Lettura da Health Connect non riuscita.")
+            ReadOutcome.Unavailable(context.getString(it.healthsync.app.R.string.hc_read_failed))
         }
     }
 
@@ -126,26 +126,26 @@ class HealthConnectGateway(private val context: Context) {
     ): ReadOutcome {
         when (sdkStatus()) {
             HealthConnectClient.SDK_UNAVAILABLE ->
-                return ReadOutcome.Unavailable("Health Connect non è disponibile su questo dispositivo.")
+                return ReadOutcome.Unavailable(context.getString(it.healthsync.app.R.string.hc_unavailable))
             HealthConnectClient.SDK_UNAVAILABLE_PROVIDER_UPDATE_REQUIRED ->
                 return ReadOutcome.Unavailable(
-                    "Health Connect non è installato o va aggiornato. Installalo dal Play Store e riprova.",
+                    context.getString(it.healthsync.app.R.string.hc_update_needed),
                 )
         }
         val client = try {
             HealthConnectClient.getOrCreate(context)
         } catch (_: Exception) {
-            return ReadOutcome.Unavailable("Impossibile collegarsi a Health Connect.")
+            return ReadOutcome.Unavailable(context.getString(it.healthsync.app.R.string.hc_connect_failed))
         }
         val granted = try {
             client.permissionController.getGrantedPermissions()
         } catch (_: Exception) {
-            return ReadOutcome.Unavailable("Impossibile leggere i permessi di Health Connect.")
+            return ReadOutcome.Unavailable(context.getString(it.healthsync.app.R.string.hc_permissions_unreadable))
         }
         val grantedIds = HealthPermissions.metrics.filter { it.permission in granted }.map { it.id }.toSet()
         if (grantedIds.isEmpty()) {
             return ReadOutcome.PermissionDenied(
-                "Nessun permesso di lettura concesso. Concedi i permessi di Health Connect e riprova.",
+                context.getString(it.healthsync.app.R.string.hc_no_read_permission),
             )
         }
         val unavailable = HealthPermissions.metrics.filter { it.id !in grantedIds }.map { it.id }.toMutableList()
@@ -314,7 +314,7 @@ class HealthConnectGateway(private val context: Context) {
                 client.aggregate(androidx.health.connect.client.request.AggregateRequest(metrics, androidx.health.connect.client.time.TimeRangeFilter.between(from, to)))
             } catch (error: Exception) {
                 if (isHistoryLimit(error)) return false
-                throwIfDenied(error)
+                throwIfDenied(error, context)
                 return false
             }
             if ((result[StepsRecord.COUNT_TOTAL] ?: 0L) > 0L) return true
@@ -344,7 +344,7 @@ class HealthConnectGateway(private val context: Context) {
             ).records.isNotEmpty()
         } catch (error: Exception) {
             if (isHistoryLimit(error)) return false
-            throwIfDenied(error)
+            throwIfDenied(error, context)
             false
         }
     }
@@ -405,7 +405,7 @@ class HealthConnectGateway(private val context: Context) {
                 client.aggregate(AggregateRequest(metrics, TimeRangeFilter.between(from, to)))
             } catch (e: Exception) {
                 if (isHistoryLimit(e)) throw e
-                throwIfDenied(e)
+                throwIfDenied(e, context)
                 continue
             }
             val sampleCount = if ("heart_rate" in grantedIds) result[HeartRateRecord.MEASUREMENTS_COUNT] else null
@@ -508,7 +508,7 @@ class HealthConnectGateway(private val context: Context) {
                     )[ActiveCaloriesBurnedRecord.ACTIVE_CALORIES_TOTAL]?.inKilocalories
                 } catch (e: Exception) {
                     if (isHistoryLimit(e)) throw e
-                    throwIfDenied(e)
+                    throwIfDenied(e, context)
                     null
                 }
             } else {
@@ -524,7 +524,7 @@ class HealthConnectGateway(private val context: Context) {
                     )[DistanceRecord.DISTANCE_TOTAL]?.inMeters
                 } catch (e: Exception) {
                     if (isHistoryLimit(e)) throw e
-                    throwIfDenied(e)
+                    throwIfDenied(e, context)
                     null
                 }
             } else {
@@ -560,7 +560,7 @@ class HealthConnectGateway(private val context: Context) {
                 )
             } catch (e: Exception) {
                 if (isHistoryLimit(e)) throw e
-                throwIfDenied(e)
+                throwIfDenied(e, context)
                 return out
             }
             out += response.records
@@ -578,10 +578,10 @@ class HealthConnectGateway(private val context: Context) {
 
 internal class AccessDenied(val outcome: ReadOutcome) : RuntimeException(outcome.toString())
 
-internal fun throwIfDenied(error: Exception) {
+internal fun throwIfDenied(error: Exception, context: android.content.Context) {
     val denied = generateSequence<Throwable>(error) { it.cause }.any { it is SecurityException }
     if (denied || isBackgroundDenial(error)) {
-        throw AccessDenied(ReadOutcome.PermissionDenied(permissionDeniedMessage(error)))
+        throw AccessDenied(ReadOutcome.PermissionDenied(permissionDeniedMessage(error, context)))
     }
 }
 
@@ -592,11 +592,11 @@ internal fun isBackgroundDenial(error: Throwable): Boolean {
     return text.contains("background", ignoreCase = true)
 }
 
-internal fun permissionDeniedMessage(error: Throwable): String {
+internal fun permissionDeniedMessage(error: Throwable, context: android.content.Context): String {
     return if (isBackgroundDenial(error)) {
-        "Lettura in background non consentita. Concedi il permesso di lettura in background, oppure tieni aperta l'app e usa Sincronizza ora."
+        context.getString(it.healthsync.app.R.string.hc_background_denied)
     } else {
-        "Health Connect ha negato la lettura. Controlla i permessi e riprova."
+        context.getString(it.healthsync.app.R.string.hc_read_denied)
     }
 }
 

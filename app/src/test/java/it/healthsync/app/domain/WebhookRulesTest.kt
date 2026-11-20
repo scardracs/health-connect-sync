@@ -18,9 +18,9 @@ class WebhookRulesTest {
         val ok = validateWebhookSettings(" https://hooks.example/salute ", "Authorization", "secret")
         assertTrue(ok.ok)
         assertNull(validateWebhookSettings("http://192.168.1.20:8080/hook", "Authorization", "k").urlError)
-        assertTrue(validateWebhookSettings("", "Authorization", "k").urlError!!.contains("URL"))
-        assertTrue(validateWebhookSettings("ftp://example.com", "Authorization", "k").urlError!!.contains("https"))
-        assertTrue(validateWebhookSettings("https://", "Authorization", "k").urlError != null)
+        assertEquals(FieldError.URL_REQUIRED, validateWebhookSettings("", "Authorization", "k").urlError)
+        assertEquals(FieldError.URL_SCHEME, validateWebhookSettings("ftp://example.com", "Authorization", "k").urlError)
+        assertEquals(FieldError.URL_INVALID, validateWebhookSettings("https://", "Authorization", "k").urlError)
     }
 
     @Test
@@ -28,7 +28,7 @@ class WebhookRulesTest {
         val badName = validateWebhookSettings("https://example.com", "Auth orization", "k")
         assertFalse(badName.ok)
         val injected = validateWebhookSettings("https://example.com", "Authorization", "secret\r\nX-Evil: 1")
-        assertTrue(injected.headerValueError!!.contains("capo"))
+        assertEquals(FieldError.HEADER_VALUE_NEWLINE, injected.headerValueError)
         assertTrue(validateWebhookSettings("https://example.com", "Authorization", "  ").headerValueError != null)
     }
 

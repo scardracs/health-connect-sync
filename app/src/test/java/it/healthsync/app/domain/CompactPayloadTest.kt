@@ -157,5 +157,7 @@ class CompactPayloadTest {
         val body = CompactPayloads.pack(listOf(day), CompactPayloads.KIND_INCREMENTAL, "Europe/Rome", "1.2.0", "2026-01-17T06:00:00+01:00", 1).single()
         assertTrue(CompactPayloads.bytes(body.json) <= CompactPayloads.MAX_BYTES)
         assertTrue(body.json.contains("\"st\":8432"))
+        assertTrue(body.json.contains("2026-01-16"))
+        assertFalse(body.json.contains("16-01-2026"))
     }
 }

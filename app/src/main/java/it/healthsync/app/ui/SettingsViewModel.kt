@@ -8,6 +8,7 @@ import it.healthsync.app.BuildConfig
 import it.healthsync.app.data.SettingsRepository
 import it.healthsync.app.data.SyncState
 import it.healthsync.app.domain.BackfillState
+import it.healthsync.app.domain.ItalianDates
 import it.healthsync.app.domain.SendPlan
 import it.healthsync.app.domain.calorieOnlySourceHint
 import it.healthsync.app.sync.SyncScheduler
@@ -30,16 +31,19 @@ enum class BackgroundAccess { GRANTED, DENIED, UNSUPPORTED, UNKNOWN }
 
 data class HealthUi(
     val availability: HcAvailability = HcAvailability.UNKNOWN,
-    val grantedLabels: List<String> = emptyList(),
-    val missingLabels: List<String> = emptyList(),
+    val grantedPermissions: Set<String> = emptySet(),
     val background: BackgroundAccess = BackgroundAccess.UNKNOWN,
     val history: BackgroundAccess = BackgroundAccess.UNKNOWN,
-)
+) {
+    val missingCount: Int
+        get() = HealthPermissions.metrics.count { it.permission !in grantedPermissions }
+}
 
 class SettingsViewModel(app: Application) : AndroidViewModel(app) {
     private val settings = SettingsRepository(app)
     private val gateway = HealthConnectGateway(app)
     private val runner = SyncRunner(
+        context = app,
         settings = settings,
         gateway = gateway,
         poster = it.healthsync.app.sync.WebhookClient(BuildConfig.VERSION_NAME),
@@ -71,7 +75,9 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
     var url = androidx.compose.runtime.mutableStateOf("")
     var headerName = androidx.compose.runtime.mutableStateOf(DEFAULT_AUTH_HEADER)
     var headerValue = androidx.compose.runtime.mutableStateOf("")
-    var startDate = androidx.compose.runtime.mutableStateOf(settings.backfillStartDate())
+    var startDate = androidx.compose.runtime.mutableStateOf(
+        ItalianDates.fromStoredDate(settings.backfillStartDate()),
+    )
     var gapSeconds = androidx.compose.runtime.mutableStateOf(settings.gapSeconds().toString())
     var validation = androidx.compose.runtime.mutableStateOf(SettingsValidation(null, null, null))
     var health = androidx.compose.runtime.mutableStateOf(HealthUi())
@@ -99,7 +105,6 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
                 return@launch
             }
             val granted = gateway.grantedPermissions()
-            val missing = HealthPermissions.metrics.filter { it.permission !in granted }
             if (granted.any { it in HealthPermissions.readPermissions }) {
                 settings.rememberFirstGrant(java.time.Instant.now())
             }
@@ -107,8 +112,7 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
             val history = featureState(gateway.historySupported(), HealthPermissions.history in granted)
             health.value = HealthUi(
                 availability = availability,
-                grantedLabels = HealthPermissions.metrics.filter { it.permission in granted }.map { it.label },
-                missingLabels = missing.map { it.label },
+                grantedPermissions = granted,
                 background = background,
                 history = history,
             )
@@ -119,12 +123,12 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
         val result = validateWebhookSettings(url.value, headerName.value, headerValue.value)
         validation.value = result
         if (!result.ok) return
+        if (!storeStartDate()) return
         settings.saveWebhook(url.value, headerName.value, headerValue.value)
-        settings.setBackfillStartDate(startDate.value)
         settings.setGapSeconds(gapSeconds.value.toLongOrNull() ?: 60L)
         gapSeconds.value = settings.gapSeconds().toString()
         headerName.value = settings.webhook().headerName
-        banner.value = "Impostazioni salvate sul telefono."
+        banner.value = getApplication<Application>().getString(it.healthsync.app.R.string.saved)
     }
 
     fun reimport() = launchQueue(reset = true)
@@ -135,11 +139,11 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
         val result = validateWebhookSettings(url.value, headerName.value, headerValue.value)
         validation.value = result
         if (!result.ok) {
-            banner.value = "Controlla URL e chiave prima di sincronizzare."
+            banner.value = getApplication<Application>().getString(it.healthsync.app.R.string.check_webhook)
             return
         }
+        if (!storeStartDate()) return
         settings.saveWebhook(url.value, headerName.value, headerValue.value)
-        settings.setBackfillStartDate(startDate.value)
         settings.setGapSeconds(gapSeconds.value.toLongOrNull() ?: 60L)
         gapSeconds.value = settings.gapSeconds().toString()
         headerName.value = settings.webhook().headerName
@@ -147,22 +151,36 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
         if (reset) {
             runner.armReimport()
             SyncScheduler.kick(getApplication(), replace = true)
-            banner.value = "Reimportazione avviata. Un invio ogni ${settings.gapSeconds()} secondi."
+            banner.value = getApplication<Application>().getString(
+                it.healthsync.app.R.string.reimport_started,
+                settings.gapSeconds(),
+            )
         } else {
             if (current == null || current.finished) {
                 if (current != null) runner.armSync()
             }
             SyncScheduler.kick(getApplication(), replace = false)
-            banner.value = if (current == null) {
-                "Importazione storica avviata. Un invio ogni ${settings.gapSeconds()} secondi."
+            val res = if (current == null) {
+                it.healthsync.app.R.string.history_started
             } else {
-                "Invio in coda. Un invio ogni ${settings.gapSeconds()} secondi."
+                it.healthsync.app.R.string.queue_started
             }
+            banner.value = getApplication<Application>().getString(res, settings.gapSeconds())
         }
     }
 
     fun consumeBanner() {
         banner.value = null
+    }
+
+    private fun storeStartDate(): Boolean {
+        val stored = ItalianDates.toStoredDate(startDate.value)
+        if (stored == null) {
+            banner.value = getApplication<Application>().getString(it.healthsync.app.R.string.start_date_invalid)
+            return false
+        }
+        settings.setBackfillStartDate(stored)
+        return true
     }
 
     private fun featureState(supported: Boolean, granted: Boolean): BackgroundAccess {

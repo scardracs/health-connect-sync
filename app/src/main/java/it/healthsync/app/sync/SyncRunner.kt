@@ -4,8 +4,11 @@ import android.content.Context
 import android.util.Log
 import it.healthsync.app.BuildConfig
 import it.healthsync.app.data.SettingsRepository
+import it.healthsync.app.R
 import it.healthsync.app.domain.CompactPayloads
+import it.healthsync.app.domain.FieldError
 import it.healthsync.app.domain.HistoryRange
+import it.healthsync.app.domain.ItalianDates
 import it.healthsync.app.domain.SendPlan
 import it.healthsync.app.domain.calorieOnlySourceHint
 import it.healthsync.app.domain.validateWebhookSettings
@@ -38,6 +41,7 @@ sealed class StepResult {
 }
 
 class SyncRunner(
+    private val context: Context,
     private val settings: SettingsRepository,
     private val gateway: HealthConnectGateway,
     private val poster: WebhookPoster,
@@ -79,7 +83,7 @@ class SyncRunner(
 
     suspend fun step(origin: SyncOrigin): StepResult = withContext(Dispatchers.IO) {
         if (!mutex.tryLock()) return@withContext StepResult.Failed(
-            SyncOutcome.Failure("C'è già un invio in corso.", retryable = true),
+            SyncOutcome.Failure(context.getString(R.string.msg_busy), retryable = true),
         )
         try {
             performStep(origin)
@@ -93,9 +97,7 @@ class SyncRunner(
         val config = settings.webhook()
         val validation = validateWebhookSettings(config.url, config.headerName, config.headerValue)
         if (!validation.ok) {
-            val message = validation.urlError ?: validation.headerNameError ?: validation.headerValueError
-                ?: "Impostazioni webhook non valide."
-            val failure = SyncOutcome.Failure(message, retryable = false)
+            val failure = SyncOutcome.Failure(explain(validation.urlError ?: validation.headerNameError ?: validation.headerValueError), retryable = false)
             settings.markFailure(attemptAt, failure.message, null)
             return StepResult.Failed(failure)
         }
@@ -120,7 +122,7 @@ class SyncRunner(
         } catch (error: Exception) {
             Log.e(TAG, "step failed: ${error.javaClass.simpleName}")
             val failure = SyncOutcome.Failure(
-                withRetryHint("Errore imprevisto durante l'invio.", retryable = true, origin),
+                withRetryHint(context.getString(R.string.msg_unexpected), retryable = true, origin),
                 retryable = true,
             )
             settings.markFailure(attemptAt, failure.message, null)
@@ -138,13 +140,10 @@ class SyncRunner(
         val userDate = settings.backfillStartDate().takeIf { it.isNotBlank() }?.let {
             runCatching { LocalDate.parse(it) }.getOrNull()
         }
-        settings.noteProgress(now, "Cerco il primo giorno con dati diversi dalle calorie…")
+        settings.noteProgress(now, context.getString(R.string.msg_scanning))
         val discovered = userDate ?: gateway.findEarliestNonCalorieDay(horizonStart, now, zoneId)
         if (discovered == null) {
-            settings.noteProgress(
-                now,
-                "Nessun giorno con passi, sonno, peso o allenamenti. Controlla le autorizzazioni di Samsung Health.",
-            )
+            settings.noteProgress(now, context.getString(R.string.msg_no_real_days))
             return plan.copy(finished = true, historyLimited = !historyGranted, endEpochMs = now.toEpochMilli())
         }
         val start = discovered.atStartOfDay(zoneId).toInstant().let { if (it.isBefore(horizonStart)) horizonStart else it }
@@ -208,26 +207,36 @@ class SyncRunner(
                             val updated = plan.copy(cursorEpochMs = advanced.toEpochMilli(), sent = sent, finished = finished)
                             settings.savePlan(updated)
                             val hint = if (calorieOnlySourceHint(read.snapshot.counts)) {
-                                " Solo calorie: in Health Connect apri Autorizzazioni app, Samsung Health, e abilita la scrittura di passi, sonno, peso e allenamenti."
+                                context.getString(R.string.msg_calorie_hint)
                             } else {
                                 ""
                             }
-                            settings.noteProgress(now, "Invio $sent accettato (fino al ${body.lastDate}).$hint")
+                            val progress = context.getString(
+                                R.string.msg_sent_until,
+                                sent,
+                                ItalianDates.format(body.lastDate),
+                            )
+                            settings.noteProgress(now, progress + hint)
                             return if (finished) {
-                                settings.markSuccess(now, end, "Invio completato: $sent richieste.$hint", posted.code)
+                                settings.markSuccess(
+                                    now,
+                                    end,
+                                    context.getString(R.string.msg_send_complete, sent) + hint,
+                                    posted.code,
+                                )
                                 StepResult.Finished
                             } else {
                                 StepResult.Posted(settings.gapSeconds())
                             }
                         }
                         is PostResult.HttpError -> {
-                            val message = "Il webhook ha risposto HTTP ${posted.code}."
+                            val message = context.getString(R.string.msg_http, posted.code)
                             return failStep(now, withRetryHint(message, posted.retryable, origin), posted.retryable, posted.code)
                         }
                         is PostResult.NetworkError -> {
                             return failStep(
                                 now,
-                                withRetryHint("Connessione al webhook non riuscita.", true, origin),
+                                withRetryHint(context.getString(R.string.msg_network), true, origin),
                                 true,
                             )
                         }
@@ -238,10 +247,11 @@ class SyncRunner(
         val finished = !cursor.isBefore(end)
         settings.savePlan(plan.copy(cursorEpochMs = cursor.toEpochMilli(), finished = finished))
         return if (finished) {
-            settings.markSuccess(now, end, "Nessun altro giorno da inviare.", 0)
+            settings.markSuccess(now, end, context.getString(R.string.msg_nothing_left), 0)
             StepResult.Finished
         } else {
-            settings.noteProgress(now, "Nessun dato da inviare fino al ${cursor.atZone(zoneId).toLocalDate()}. Continuo la ricerca.")
+            val shown = ItalianDates.format(cursor.atZone(zoneId).toLocalDate())
+            settings.noteProgress(now, context.getString(R.string.msg_skip_until, shown))
             StepResult.ScanMore(5)
         }
     }
@@ -252,11 +262,35 @@ class SyncRunner(
     }
 
     private fun planMessage(plan: SendPlan): String {
-        return if (plan.historyLimited) {
-            "Importazione ferma: nessun dato oltre le calorie nella finestra consentita."
-        } else {
-            "Importazione ferma: nessun giorno con dati diversi dalle calorie."
+        val res = if (plan.historyLimited) R.string.msg_stopped_limited else R.string.msg_stopped_empty
+        return context.getString(res)
+    }
+
+    private fun explain(code: String?): String {
+        val res = when (code) {
+            FieldError.URL_REQUIRED -> R.string.err_url_required
+            FieldError.URL_TOO_LONG -> R.string.err_url_too_long
+            FieldError.URL_WHITESPACE -> R.string.err_url_whitespace
+            FieldError.URL_INVALID -> R.string.err_url_invalid
+            FieldError.URL_SCHEME -> R.string.err_url_scheme
+            FieldError.URL_HOST -> R.string.err_url_host
+            FieldError.HEADER_NAME_TOO_LONG -> R.string.err_header_name_too_long
+            FieldError.HEADER_NAME_INVALID -> R.string.err_header_name_invalid
+            FieldError.HEADER_VALUE_REQUIRED -> R.string.err_header_value_required
+            FieldError.HEADER_VALUE_TOO_LONG -> R.string.err_header_value_too_long
+            FieldError.HEADER_VALUE_NEWLINE -> R.string.err_header_value_newline
+            else -> R.string.msg_webhook_invalid
         }
+        return context.getString(res)
+    }
+
+    private fun withRetryHint(base: String, retryable: Boolean, origin: SyncOrigin): String {
+        val hint = when {
+            retryable && origin == SyncOrigin.WORKER -> context.getString(R.string.msg_retry_auto)
+            retryable -> context.getString(R.string.msg_retry_resume)
+            else -> ""
+        }
+        return base + hint
     }
 
     companion object {
@@ -266,6 +300,7 @@ class SyncRunner(
         fun create(context: Context): SyncRunner {
             val appContext = context.applicationContext
             return SyncRunner(
+                context = appContext,
                 settings = SettingsRepository(appContext),
                 gateway = HealthConnectGateway(appContext),
                 poster = WebhookClient(BuildConfig.VERSION_NAME),
@@ -273,13 +308,5 @@ class SyncRunner(
             )
         }
 
-        private fun withRetryHint(base: String, retryable: Boolean, origin: SyncOrigin): String {
-            val hint = when {
-                retryable && origin == SyncOrigin.WORKER -> " Nuovo tentativo automatico."
-                retryable -> " L'invio riprende da solo."
-                else -> ""
-            }
-            return base + hint
-        }
     }
 }

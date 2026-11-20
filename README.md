@@ -4,7 +4,7 @@ Android app that reads the user's data from **Health Connect** (where Samsung He
 
 There is no backend, no analytics, and no third-party trackers. The URL and the key stay on the phone, encrypted with `EncryptedSharedPreferences` (AES-256, key in the Android Keystore).
 
-The in-app UI is Italian. This README, the code comments, and the release notes are English.
+The phone UI defaults to Italian and can be switched to English in Settings. Dates on screen use DD-MM-YYYY. Webhook JSON, stored dates, and this README stay in English, and payload dates stay ISO `yyyy-MM-dd`.
 
 - Kotlin, Jetpack Compose
 - `minSdk` 28, `compileSdk` / `targetSdk` 37 (Android 17)
@@ -13,7 +13,7 @@ The in-app UI is Italian. This README, the code comments, and the release notes 
 
 ## Install on a phone
 
-The sideload APK is signed (see below). Version 1.2.0 is `salute-sync-1.2.0.apk`.
+The sideload APK is signed (see below). Version 1.3.0 is `salute-sync-1.3.0.apk`. Webhook URL, header, and key are on the Settings screen. The main screen shows sync status and a short notice if the webhook or Health Connect permissions are missing.
 
 1. Copy the APK to the phone (Drive, email, cable, or download it in the browser).
 2. Open it. If Android blocks the install, allow **Install unknown apps** for the app you are opening it from (Chrome, Files, Gmail, and so on). On Android 8 and later this permission is per app, not a global switch: Settings → Apps → the app used to open the file → Install unknown apps.
@@ -34,7 +34,7 @@ To update the app, install a newer APK signed with the same key over this one. U
 
 - `Content-Type: application/json; charset=utf-8`
 - The header name and value you configured (default name `Authorization`)
-- `User-Agent: SaluteSync/1.2.0`
+- `User-Agent: SaluteSync/1.3.0`
 
 Every POST body is at most **3,500 bytes**. Requests are sent **one at a time**, with at least **60 seconds** between them (the pause can be raised in the app, not lowered). WorkManager keeps the queue going in the background. Progress is stored on the phone, so a failure resumes at the next unsent day.
 
