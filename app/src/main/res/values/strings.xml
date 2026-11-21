@@ -25,7 +25,6 @@
     <string name="queue_scanning">Cerco il primo giorno con dati diversi dalle calorie…</string>
     <string name="queue_progress">Invii riusciti: %1$d. Dal cursore %2$s al %3$s.</string>
     <string name="last_read">Ultima lettura — passi: %1$d, sonno: %2$d, peso: %3$d, allenamenti: %4$d, giorni con calorie: %5$d.</string>
-    <string name="calorie_only_hint">Health Connect ha restituito solo calorie. Apri Health Connect → Autorizzazioni app → Samsung Health e attiva la scrittura per passi, sonno, peso e allenamenti. Poi tocca Reimporta storico.</string>
     <string name="sync_help">Gli invii sono uno alla volta, con almeno 60 secondi di pausa, e restano sotto i 3500 byte. La prima sincronizzazione importa lo storico dal primo giorno che non contiene solo calorie. I giorni con sole calorie stimate non vengono inviati. Senza il permesso di lettura dello storico il limite è di 30 giorni prima della prima concessione. Il lavoro continua in background.</string>
     <string name="battery_button">Non ottimizzare la batteria</string>
     <string name="footer">Ogni invio contiene i totali giornalieri e le letture che autorizzi. Versione %1$s. Nessun tracciamento e nessun server dell\'app.</string>
@@ -107,7 +106,6 @@
     <string name="msg_scanning">Cerco il primo giorno con dati diversi dalle calorie…</string>
     <string name="msg_no_real_days">Nessun giorno con passi, sonno, peso o allenamenti. Controlla le autorizzazioni di Samsung Health.</string>
     <string name="msg_sent_until">Invio %1$d accettato (fino al %2$s).</string>
-    <string name="msg_calorie_hint"> Solo calorie: in Health Connect apri Autorizzazioni app, Samsung Health, e abilita la scrittura di passi, sonno, peso e allenamenti.</string>
     <string name="msg_send_complete">Invio completato: %1$d richieste.</string>
     <string name="msg_http">Il webhook ha risposto HTTP %1$d.</string>
     <string name="msg_network">Connessione al webhook non riuscita.</string>

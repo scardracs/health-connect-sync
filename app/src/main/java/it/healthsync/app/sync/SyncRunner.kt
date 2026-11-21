@@ -10,7 +10,6 @@ import it.healthsync.app.domain.FieldError
 import it.healthsync.app.domain.HistoryRange
 import it.healthsync.app.domain.ItalianDates
 import it.healthsync.app.domain.SendPlan
-import it.healthsync.app.domain.calorieOnlySourceHint
 import it.healthsync.app.domain.validateWebhookSettings
 import it.healthsync.app.health.HealthConnectGateway
 import it.healthsync.app.health.HealthPermissions
@@ -206,22 +205,17 @@ class SyncRunner(
                             val finished = !advanced.isBefore(end)
                             val updated = plan.copy(cursorEpochMs = advanced.toEpochMilli(), sent = sent, finished = finished)
                             settings.savePlan(updated)
-                            val hint = if (calorieOnlySourceHint(read.snapshot.counts)) {
-                                context.getString(R.string.msg_calorie_hint)
-                            } else {
-                                ""
-                            }
                             val progress = context.getString(
                                 R.string.msg_sent_until,
                                 sent,
                                 ItalianDates.format(body.lastDate),
                             )
-                            settings.noteProgress(now, progress + hint)
+                            settings.noteProgress(now, progress)
                             return if (finished) {
                                 settings.markSuccess(
                                     now,
                                     end,
-                                    context.getString(R.string.msg_send_complete, sent) + hint,
+                                    context.getString(R.string.msg_send_complete, sent),
                                     posted.code,
                                 )
                                 StepResult.Finished

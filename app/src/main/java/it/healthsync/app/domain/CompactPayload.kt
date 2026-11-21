@@ -299,11 +299,6 @@ fun WireDay.isCalorieOnly(): Boolean {
     return copy.isEmpty()
 }
 
-fun calorieOnlySourceHint(counts: Map<String, Int>): Boolean {
-    val quiet = listOf("steps", "sleep", "weight", "exercise").all { (counts[it] ?: 0) == 0 }
-    return quiet && (counts["calories"] ?: 0) > 0
-}
-
 private fun SleepSessionInput.toWire(zone: ZoneId): WireSleep {
     val stages = stages.groupBy { stageCode(it.stage) }
         .mapValues { (_, rows) -> rows.sumOf { durationMinutes(it.start, it.end).toInt() } }

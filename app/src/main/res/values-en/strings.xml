@@ -25,7 +25,6 @@
     <string name="queue_scanning">Looking for the first day that is not only calories…</string>
     <string name="queue_progress">Successful sends: %1$d. Cursor %2$s through %3$s.</string>
     <string name="last_read">Last read — steps: %1$d, sleep: %2$d, weight: %3$d, workouts: %4$d, days with calories: %5$d.</string>
-    <string name="calorie_only_hint">Health Connect returned only calories. Open Health Connect → App permissions → Samsung Health and turn on write for steps, sleep, weight, and exercise. Then tap Reimport history.</string>
     <string name="sync_help">Sends go out one at a time, at least 60 seconds apart, and stay under 3500 bytes. The first sync imports history from the first day that is not only calories. Calorie-only days are not sent. Without the history permission the window is 30 days before the first grant. Work continues in the background.</string>
     <string name="battery_button">Don\'t optimize battery</string>
     <string name="footer">Each send contains the daily totals and readings you allow. Version %1$s. No tracking and no app server.</string>
@@ -107,7 +106,6 @@
     <string name="msg_scanning">Looking for the first day that is not only calories…</string>
     <string name="msg_no_real_days">No day with steps, sleep, weight, or workouts. Check Samsung Health permissions.</string>
     <string name="msg_sent_until">Send %1$d accepted (through %2$s).</string>
-    <string name="msg_calorie_hint"> Only calories: in Health Connect open App permissions, Samsung Health, and allow write for steps, sleep, weight, and exercise.</string>
     <string name="msg_send_complete">Send finished: %1$d requests.</string>
     <string name="msg_http">The webhook responded HTTP %1$d.</string>
     <string name="msg_network">Could not connect to the webhook.</string>

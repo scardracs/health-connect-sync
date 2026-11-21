@@ -1,3 +1,17 @@
+# Salute Sync v1.3.3
+
+## English
+
+Removes the warning that appeared when Health Connect returned only calories. Calories alone do not mean read permissions are missing; there may simply be no other data. Denied Health Connect read permissions are still reported as before. Dates stay DD-MM-YYYY. The v1.3.1 settings-launch fix and the v1.3.2 dependencies are unchanged.
+
+`versionCode` 7, same sideload key. Payload schema v3 is unchanged. Attach `salute-sync-1.3.3.apk`.
+
+## Italiano
+
+Rimuove l'avviso che compariva quando Health Connect restituiva solo calorie. Le sole calorie non significano che manchino i permessi di lettura: può semplicemente non esserci altro dato. I permessi di lettura negati da Health Connect restano segnalati come prima. Le date restano GG-MM-AAAA. La correzione della v1.3.1 per aprire le impostazioni e le dipendenze della v1.3.2 sono invariate.
+
+`versionCode` 7, stessa chiave di sideload. Lo schema del payload v3 non cambia. Allegare `salute-sync-1.3.3.apk`.
+
 # Salute Sync v1.3.2
 
 ## English

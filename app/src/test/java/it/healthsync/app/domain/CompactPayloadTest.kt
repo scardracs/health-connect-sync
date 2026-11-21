@@ -95,10 +95,6 @@ class CompactPayloadTest {
         assertTrue(calories.isCalorieOnly())
         assertFalse(walked.isCalorieOnly())
         assertEquals(listOf("2012-01-02"), CompactPayloads.forBackfill(listOf(calories, walked)).map { it.date })
-        assertFalse(calorieOnlySourceHint(mapOf("steps" to 3, "calories" to 10)))
-        assertTrue(
-            calorieOnlySourceHint(mapOf("steps" to 0, "sleep" to 0, "weight" to 0, "exercise" to 0, "calories" to 4)),
-        )
     }
 
     @Test

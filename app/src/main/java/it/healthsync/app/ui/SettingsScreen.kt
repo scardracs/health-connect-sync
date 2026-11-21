@@ -59,7 +59,6 @@ import it.healthsync.app.domain.ExternalScreens
 import it.healthsync.app.domain.FieldError
 import it.healthsync.app.domain.ItalianDates
 import it.healthsync.app.domain.SendPlan
-import it.healthsync.app.domain.calorieOnlySourceHint
 import it.healthsync.app.health.HealthPermissions
 import java.time.ZoneId
 
@@ -211,10 +210,6 @@ private fun HomePage(
                     ),
                     style = MaterialTheme.typography.bodySmall,
                 )
-                if (calorieOnlySourceHint(counts)) {
-                    Spacer(Modifier.height(6.dp))
-                    Text(stringResource(R.string.calorie_only_hint), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium)
-                }
             }
             Spacer(Modifier.height(10.dp))
             Button(onClick = viewModel::syncNow, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.sync_now)) }

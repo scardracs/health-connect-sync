@@ -10,7 +10,6 @@ import it.healthsync.app.data.SyncState
 import it.healthsync.app.domain.BackfillState
 import it.healthsync.app.domain.ItalianDates
 import it.healthsync.app.domain.SendPlan
-import it.healthsync.app.domain.calorieOnlySourceHint
 import it.healthsync.app.sync.SyncScheduler
 import it.healthsync.app.domain.DEFAULT_AUTH_HEADER
 import it.healthsync.app.domain.SettingsValidation
