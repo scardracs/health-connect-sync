@@ -4,27 +4,30 @@ Android app that reads the user's data from **Health Connect** (where Samsung He
 
 There is no backend, no analytics, and no third-party trackers. The URL and the key stay on the phone, encrypted with `EncryptedSharedPreferences` (AES-256, key in the Android Keystore).
 
-The phone UI defaults to Italian and can be switched to English in Settings. Dates on screen use DD-MM-YYYY. Webhook JSON, stored dates, and this README stay in English, and payload dates stay ISO `yyyy-MM-dd`.
+The phone UI defaults to Italian and can be switched to English in Settings, and again on the first-launch screen. That choice is the Android per-app language, so on Android 13 and later it matches Settings > Apps > Salute Sync > Language. Dates on screen use DD-MM-YYYY (and DD-MM-YYYY HH:mm when a time is shown). Webhook JSON and stored dates stay ISO `yyyy-MM-dd`. This README is English.
 
 - Kotlin, Jetpack Compose
-- `minSdk` 28, `compileSdk` / `targetSdk` 37 (Android 17)
+- `minSdk` 28, `compileSdk` 37.1, `targetSdk` 37
 - Health Connect `connect-client` 1.1.0
 - WorkManager, sync around 06:00 in the phone's time zone
 
 ## Install on a phone
 
-The sideload APK is signed (see below). Version 1.3.3 is `salute-sync-1.3.3.apk`. Webhook URL, header, and key are on the Settings screen. The main screen shows sync status and a short notice if the webhook or Health Connect permissions are missing.
+The sideload APK is signed (see below). The current release asset is `salute-sync-1.4.0.apk`, published on the GitHub release `v1.4.0` (`https://github.com/scardracs/health-connect-sync/releases/download/v1.4.0/salute-sync-1.4.0.apk`). Older tags use the same pattern: `salute-sync-<version>.apk`.
 
-1. Copy the APK to the phone (Drive, email, cable, or download it in the browser).
+The main screen shows sync status, last sync, per-type counts, **Sync now**, and **Reimport history**. If the webhook or Health Connect read permissions are missing, a short notice links to Settings. Webhook URL, header name, header value (masked until shown), language, morning sync, and Health Connect permissions are on the Settings screen. The first time the app opens, including after an update from an older version, a dialog asks for the language and offers the Health Connect setup. **Skip** closes it and does not turn off the morning sync. It does not appear again.
+
+1. Copy the APK to the phone (Drive, email, cable, or a browser download).
 2. Open it. If Android blocks the install, allow **Install unknown apps** for the app you are opening it from (Chrome, Files, Gmail, and so on). On Android 8 and later this permission is per app, not a global switch: Settings → Apps → the app used to open the file → Install unknown apps.
 3. Confirm the install and open **Salute Sync**.
-4. On Android 13 or earlier, if Health Connect is missing, tap **Installa o aggiorna Health Connect** (Play Store, package `com.google.android.apps.healthdata`). On Android 14 and later Health Connect is part of the system: Settings → Security and privacy → Privacy controls → Health Connect, or search for "Health Connect".
-5. In **Samsung Health**, turn on sync to Health Connect for the types you want (steps, sleep, weight, workouts, heart rate, and the others). The menu path changes with the Samsung Health version: search for "Health Connect" in Samsung Health settings, then check in Health Connect that Samsung Health is listed as a source.
-6. In Salute Sync tap **Concedi permessi di lettura** and accept the types you want to send. Denied types are not read and are listed in `unavailableMetrics`. They are not treated as zeros.
-7. If the phone supports it, tap **Consenti lettura in background**. Without that permission the 06:00 sync cannot read data while the screen is off. **Sincronizza ora** still works while the app is open.
-8. Paste the webhook URL (`https://` is recommended; `http://` is allowed, for example on a local network) and the header value. The header name defaults to `Authorization` and can be changed.
-9. Tap **Salva impostazioni**, then **Sincronizza ora**.
-10. Check the time and result of the last sync at the bottom. The automatic sync is a WorkManager job every 24 hours, with the first run aimed at 06:00 in the phone's time zone (in Italy, `Europe/Rome`). Android may delay it while battery saving is on. The **Non ottimizzare la batteria** button opens the system request.
+4. In the welcome dialog, pick **Italiano** or **English**. The rest of the app switches immediately.
+5. Still in the dialog, or later in Settings, tap **Grant read permissions** and accept the types you want to send. **Open Health Connect** uses the system permission screen when the phone has one, then Health Connect settings, then the Play Store page, then this app's system details. Denied types are not read. Settings lists each type as granted or not granted.
+6. On Android 13 or earlier, if Health Connect is missing, Settings offers **Install or update Health Connect** (Play Store, package `com.google.android.apps.healthdata`). On Android 14 and later Health Connect is part of the system: Settings → Security and privacy → Privacy controls → Health Connect, or search for "Health Connect".
+7. In **Samsung Health**, turn on sync to Health Connect for the types you want (steps, sleep, weight, workouts, heart rate, and the others). The menu path changes with the Samsung Health version: search for "Health Connect" in Samsung Health settings, then check in Health Connect that Samsung Health is listed as a source.
+8. If the phone supports it, in Settings tap **Allow background read** and **Allow history read**. Without background read, the 06:00 sync cannot read while the screen is off. **Sync now** still works with the app open. Without history read, Health Connect only allows data from 30 days before the first permission grant. The screen says so.
+9. In Settings, paste the webhook URL (`https://` is recommended; `http://` is allowed, for example on a local network) and the header value. The header name defaults to `Authorization` and can be changed. The key stays masked until you tap **Show key**.
+10. Tap **Save settings**, then on the main screen **Sync now**.
+11. The main screen shows the last success and the last attempt as DD-MM-YYYY HH:mm. The automatic sync is a WorkManager job every 24 hours, aimed at 06:00 in the phone's time zone (in Italy, `Europe/Rome`). Leave **Sync every morning around 06:00** on, in the welcome dialog or in Settings. Android may delay it while battery saving is on. **Don't optimize battery** on the main screen opens the system request.
 
 To update the app, install a newer APK signed with the same key over this one. Uninstalling clears the URL, the key, and the time of the last sync.
 
@@ -34,13 +37,13 @@ To update the app, install a newer APK signed with the same key over this one. U
 
 - `Content-Type: application/json; charset=utf-8`
 - The header name and value you configured (default name `Authorization`)
-- `User-Agent: SaluteSync/1.3.3`
+- `User-Agent: SaluteSync/1.4.0`
 
 Every POST body is at most **3,500 bytes**. Requests are sent **one at a time**, with at least **60 seconds** between them (the pause can be raised in the app, not lowered). WorkManager keeps the queue going in the background. Progress is stored on the phone, so a failure resumes at the next unsent day.
 
-The first sync imports history. By default it starts at the earliest day that has something other than calorie estimates, and it does not POST days that contain only calories. You can set an explicit start date (`yyyy-MM-dd`). **Reimporta storico** clears the cursor and starts again. Later mornings send only the new days (`k` is `i` instead of `b`).
+The first sync imports history. By default it starts at the earliest day that has something other than calorie estimates, and it does not POST days that contain only calories. You can set an explicit start date on the Settings screen; the field is shown as DD-MM-YYYY and stored as `yyyy-MM-dd`. **Reimport history** clears the cursor and starts again. Later mornings send only the new days (`k` is `i` instead of `b`).
 
-With the history permission the search can go back 15 years. Without it, Health Connect only allows data from 30 days before the first read grant, and the Italian screen says so.
+With the history permission the search can go back 15 years. Without it, Health Connect only allows data from 30 days before the first read grant, and the screen says so. Settings can request that permission.
 
 Steps, sleep, weight, and workouts are requested and read. The screen shows the record counts from the last read. A read that contains only calories is not treated as a permission error: there may simply be no other data. Denied Health Connect read permissions are still listed in Settings.
 
@@ -48,7 +51,7 @@ Daily totals (steps, distance, calories, heart rate, resting heart rate, hydrati
 
 A sleep session or a workout is included when its **start** falls inside the window. Duration and stages are the full session, even if the end is past the window. Workout calories and distance are the Health Connect aggregate over the session interval.
 
-If Health Connect rejects a window that starts more than 30 days before the permission was granted, the app retries the last 30 days and sets `"historyLimited": true`. The extra history permission is not requested.
+If Health Connect rejects a window that starts more than 30 days before the permission was granted, the app retries the last 30 days. The compact webhook body does not add an extra field for that case. The status text on the phone explains when the import stops inside that window.
 
 On a network error, or HTTP 408, 429, or 5xx, WorkManager retries with exponential backoff (minimum 15 minutes, up to 5 attempts in that cycle). A wrong URL or key (other 4xx) is not retried in a tight loop. The periodic sync stays scheduled either way.
 
@@ -103,7 +106,7 @@ The `release` build is signed with the keystore in the repository, `keystore/sal
 
 ## Build locally
 
-You need JDK 17 or newer and Android SDK 37 (platform `android-37` / `android-37.0` and build-tools 37).
+You need JDK 17 or newer and Android SDK platform `android-37.1` (and build-tools 37). `targetSdk` stays 37.
 
 ```bash
 export ANDROID_HOME="$HOME/android-sdk"

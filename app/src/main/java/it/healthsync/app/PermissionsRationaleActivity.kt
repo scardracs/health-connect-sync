@@ -1,9 +1,9 @@
 package it.healthsync.app
 
 import android.os.Bundle
-import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.appcompat.app.AppCompatActivity
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -21,7 +21,7 @@ import androidx.compose.ui.unit.dp
 import it.healthsync.app.R
 import it.healthsync.app.ui.theme.SaluteSyncTheme
 
-class PermissionsRationaleActivity : ComponentActivity() {
+class PermissionsRationaleActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()

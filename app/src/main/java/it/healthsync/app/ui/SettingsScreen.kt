@@ -4,7 +4,6 @@ import android.content.Context
 import android.os.Build
 import android.os.PowerManager
 import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.appcompat.app.AppCompatDelegate
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -18,7 +17,9 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -47,13 +48,17 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
-import androidx.core.os.LocaleListCompat
 import androidx.health.connect.client.PermissionController
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import it.healthsync.app.AppLocales
 import it.healthsync.app.R
+import it.healthsync.app.data.OnboardingStore
+import it.healthsync.app.domain.AppLanguage
+import it.healthsync.app.domain.Onboarding
+import it.healthsync.app.sync.SyncScheduler
 import it.healthsync.app.data.SyncStatus
 import it.healthsync.app.domain.ExternalScreens
 import it.healthsync.app.domain.FieldError
@@ -69,6 +74,7 @@ fun SaluteApp(viewModel: SettingsViewModel) {
     val context = LocalContext.current
     val snackbarHostState = remember { SnackbarHostState() }
     var page by remember { mutableStateOf(Page.Home) }
+    var showOnboarding by remember { mutableStateOf(Onboarding.shouldShow(OnboardingStore.read(context))) }
     var ignoringBattery by remember { mutableStateOf(false) }
     val zone = remember { ZoneId.systemDefault() }
 
@@ -145,6 +151,29 @@ fun SaluteApp(viewModel: SettingsViewModel) {
                     modifier = Modifier.padding(padding),
                 )
             }
+        }
+        if (showOnboarding) {
+            val grantReadFailed = stringResource(R.string.grant_read_failed)
+            OnboardingDialog(
+                onGrantRead = {
+                    try {
+                        readPermissionLauncher.launch(HealthPermissions.readPermissions)
+                    } catch (_: Exception) {
+                        viewModel.banner.value = grantReadFailed
+                    }
+                },
+                onOpenHealthConnect = { openHealthConnect(context) },
+                onContinue = { daily ->
+                    val updated = Onboarding.complete(OnboardingStore.read(context), daily)
+                    OnboardingStore.write(context, updated)
+                    if (daily) SyncScheduler.ensureDaily(context) else SyncScheduler.cancelDaily(context)
+                    showOnboarding = false
+                },
+                onSkip = {
+                    OnboardingStore.write(context, Onboarding.skip(OnboardingStore.read(context)))
+                    showOnboarding = false
+                },
+            )
         }
     }
 }
@@ -243,16 +272,25 @@ private fun SettingsPage(
     val health = viewModel.health.value
     val validation = viewModel.validation.value
     var revealKey by remember { mutableStateOf(false) }
-    val language = currentLanguage()
+    val context = LocalContext.current
+    var language by remember { mutableStateOf(AppLocales.current(context)) }
     PageColumn(modifier) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             TextButton(onClick = onBack) { Text(stringResource(R.string.back)) }
             Text(stringResource(R.string.settings_title), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
         }
         SectionCard(stringResource(R.string.section_language)) {
-            LanguageRow(stringResource(R.string.language_italian), language == "it") { setLanguage("it") }
-            LanguageRow(stringResource(R.string.language_english), language == "en") { setLanguage("en") }
+            LanguageRow(stringResource(R.string.language_italian), language == AppLanguage.ITALIAN) {
+                language = AppLanguage.ITALIAN
+                AppLocales.apply(context, AppLanguage.ITALIAN)
+            }
+            LanguageRow(stringResource(R.string.language_english), language == AppLanguage.ENGLISH) {
+                language = AppLanguage.ENGLISH
+                AppLocales.apply(context, AppLanguage.ENGLISH)
+            }
             Text(stringResource(R.string.language_help), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.height(8.dp))
+            DailySyncRow(context)
         }
         SectionCard(stringResource(R.string.section_webhook)) {
             OutlinedTextField(
@@ -487,13 +525,68 @@ private fun fieldError(code: String?): String? {
     return stringResource(res)
 }
 
-private fun currentLanguage(): String {
-    val language = AppCompatDelegate.getApplicationLocales().get(0)?.language
-    return if (language == "en") "en" else "it"
+@Composable
+private fun DailySyncRow(context: Context) {
+    var enabled by remember { mutableStateOf(OnboardingStore.read(context).dailySync) }
+    Row(
+        Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Checkbox(
+            checked = enabled,
+            onCheckedChange = { checked ->
+                enabled = checked
+                OnboardingStore.write(context, Onboarding.setDailySync(OnboardingStore.read(context), checked))
+                if (checked) SyncScheduler.ensureDaily(context) else SyncScheduler.cancelDaily(context)
+            },
+        )
+        Text(stringResource(R.string.daily_sync), modifier = Modifier.padding(start = 8.dp))
+    }
 }
 
-private fun setLanguage(tag: String) {
-    AppCompatDelegate.setApplicationLocales(LocaleListCompat.forLanguageTags(tag))
+@Composable
+private fun OnboardingDialog(
+    onGrantRead: () -> Unit,
+    onOpenHealthConnect: () -> Unit,
+    onContinue: (Boolean) -> Unit,
+    onSkip: () -> Unit,
+) {
+    val context = LocalContext.current
+    var language by remember { mutableStateOf(AppLocales.current(context)) }
+    var daily by remember { mutableStateOf(OnboardingStore.read(context).dailySync) }
+    AlertDialog(
+        onDismissRequest = onSkip,
+        title = { Text(stringResource(R.string.onboarding_title)) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(stringResource(R.string.onboarding_body))
+                LanguageRow(stringResource(R.string.language_italian), language == AppLanguage.ITALIAN) {
+                    language = AppLanguage.ITALIAN
+                    AppLocales.apply(context, AppLanguage.ITALIAN)
+                }
+                LanguageRow(stringResource(R.string.language_english), language == AppLanguage.ENGLISH) {
+                    language = AppLanguage.ENGLISH
+                    AppLocales.apply(context, AppLanguage.ENGLISH)
+                }
+                Button(onClick = onGrantRead, modifier = Modifier.fillMaxWidth()) {
+                    Text(stringResource(R.string.grant_read))
+                }
+                OutlinedButton(onClick = onOpenHealthConnect, modifier = Modifier.fillMaxWidth()) {
+                    Text(stringResource(R.string.onboarding_open_hc))
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(checked = daily, onCheckedChange = { daily = it })
+                    Text(stringResource(R.string.daily_sync), modifier = Modifier.padding(start = 8.dp))
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { onContinue(daily) }) { Text(stringResource(R.string.onboarding_continue)) }
+        },
+        dismissButton = {
+            TextButton(onClick = onSkip) { Text(stringResource(R.string.onboarding_skip)) }
+        },
+    )
 }
 
 private fun openHealthConnect(context: Context) {

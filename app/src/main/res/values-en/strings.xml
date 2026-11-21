@@ -33,6 +33,12 @@
     <string name="language_italian">Italiano</string>
     <string name="language_english">English</string>
     <string name="language_help">The app language changes immediately. Data sent to the webhook keeps the same format.</string>
+    <string name="daily_sync">Sync every morning around 06:00</string>
+    <string name="onboarding_title">Welcome to Salute Sync</string>
+    <string name="onboarding_body">Choose the language. Then, if you want, let Salute Sync read Health Connect. You can change all of this later in Settings.</string>
+    <string name="onboarding_open_hc">Open Health Connect</string>
+    <string name="onboarding_continue">Continue</string>
+    <string name="onboarding_skip">Skip</string>
 
     <string name="section_webhook">Webhook</string>
     <string name="webhook_url">Webhook URL</string>

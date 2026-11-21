@@ -33,6 +33,12 @@
     <string name="language_italian">Italiano</string>
     <string name="language_english">English</string>
     <string name="language_help">La lingua dell\'app cambia subito. I dati inviati al webhook restano nello stesso formato.</string>
+    <string name="daily_sync">Sincronizza ogni mattina verso le 06:00</string>
+    <string name="onboarding_title">Benvenuto in Salute Sync</string>
+    <string name="onboarding_body">Scegli la lingua. Poi, se vuoi, consenti a Salute Sync di leggere Health Connect. Puoi cambiare tutto più tardi in Impostazioni.</string>
+    <string name="onboarding_open_hc">Apri Health Connect</string>
+    <string name="onboarding_continue">Continua</string>
+    <string name="onboarding_skip">Salta</string>
 
     <string name="section_webhook">Webhook</string>
     <string name="webhook_url">URL del webhook</string>

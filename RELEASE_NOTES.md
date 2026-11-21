@@ -1,3 +1,25 @@
+# Salute Sync v1.4.0
+
+## English
+
+Fixes the language switch and adds a one-time welcome screen. Choosing English or Italian did nothing, including after the app was closed and opened again. On Android 13 and later, `AppCompatDelegate.setApplicationLocales` only writes the language when an `AppCompatActivity` is on screen. Both activities were `ComponentActivity`, so the call returned without saving anything.
+
+The activities now extend `AppCompatActivity`, and the choice is written straight to `LocaleManager` (the same store as Settings > Apps > Salute Sync > Language). Below Android 13 it is stored by AppCompat and still applied immediately. The screen, toasts, and later sync messages follow the new language.
+
+The first launch, including an update from an older version, shows a dialog: pick Italiano or English, grant Health Connect read permissions, open Health Connect, and leave the 06:00 sync on or off. **Skip** closes it and does not turn the morning sync off. It is not shown again. The same choices stay in Settings. Dates stay DD-MM-YYYY. The README instructions are English.
+
+`versionCode` 8, same sideload key. Payload schema v3 is unchanged. Attach `salute-sync-1.4.0.apk`.
+
+## Italiano
+
+Corregge il cambio lingua e aggiunge una schermata di benvenuto, una sola volta. Scegliere English o Italiano non cambiava nulla, nemmeno chiudendo e riaprendo l'app. Da Android 13 in poi, `AppCompatDelegate.setApplicationLocales` scrive la lingua solo se è attiva un'`AppCompatActivity`. Entrambe le activity erano `ComponentActivity`, quindi la chiamata usciva senza salvare nulla.
+
+Le activity ora estendono `AppCompatActivity`, e la scelta viene scritta direttamente in `LocaleManager` (lo stesso archivio di Impostazioni > App > Salute Sync > Lingua). Sotto Android 13 la salva AppCompat e viene applicata subito. Schermate, toast e i messaggi delle sincronizzazioni successive seguono la nuova lingua.
+
+Al primo avvio, anche aggiornando da una versione precedente, compare una finestra: scegli Italiano o English, concedi i permessi di lettura di Health Connect, apri Health Connect, e lascia attiva o no la sync delle 06:00. **Salta** la chiude e non spegne la sync del mattino. Non viene più mostrata. Le stesse scelte restano in Impostazioni. Le date restano GG-MM-AAAA. Le istruzioni del README sono in inglese.
+
+`versionCode` 8, stessa chiave di sideload. Lo schema del payload v3 non cambia. Allegare `salute-sync-1.4.0.apk`.
+
 # Salute Sync v1.3.3
 
 ## English

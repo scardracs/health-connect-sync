@@ -38,6 +38,10 @@ object SyncScheduler {
         )
     }
 
+    fun cancelDaily(context: Context) {
+        WorkManager.getInstance(context).cancelUniqueWork(DAILY)
+    }
+
     /** Start the queue if it is idle. [replace] cancels the current chain first. */
     fun kick(context: Context, replace: Boolean) {
         val request = OneTimeWorkRequestBuilder<SyncWorker>()
