@@ -23,10 +23,11 @@ android {
 
     signingConfigs {
         create("sideload") {
-            storeFile = rootProject.file("keystore/salute-sync.jks")
-            storePassword = "salutesync"
-            keyAlias = "salutesync"
-            keyPassword = "salutesync"
+            val keystorePath = System.getenv("ANDROID_KEYSTORE_PATH")
+            storeFile = if (!keystorePath.isNullOrBlank()) file(keystorePath) else rootProject.file("keystore/salute-sync.jks")
+            storePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD") ?: "salutesync"
+            keyAlias = System.getenv("ANDROID_KEY_ALIAS") ?: "salutesync"
+            keyPassword = System.getenv("ANDROID_KEY_PASSWORD") ?: "salutesync"
         }
     }
 

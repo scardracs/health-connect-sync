@@ -119,7 +119,9 @@ Days that contain only `ak`, `tk`, and `bk` are not sent during backfill.
 
 ## APK signing
 
-The `release` build is signed with the keystore in the repository, `keystore/salute-sync.jks` (alias `salutesync`, store password and key password `salutesync`). This is a sideload key, public on purpose, not a Play Store key. It is fine for installing and updating this app outside the store. Do not use it to publish on Google Play.
+Local release builds are signed with the keystore in the repository, `keystore/salute-sync.jks` (alias `salutesync`, store password and key password `salutesync`). This is a sideload key, public on purpose, not a Play Store key. It is fine for installing and updating this app outside the store. Do not use it to publish on Google Play.
+
+GitHub releases are built by `.github/workflows/release.yml` when a `v*` tag is pushed. That job does not read the keystore file from the repository. It decodes the keystore from Actions secrets and signs with those values. The secret names are listed in the workflow.
 
 `EncryptedSharedPreferences` is the API used for the URL and the key. Jetpack marked it deprecated in `security-crypto` 1.1.0 and has not shipped an official replacement. It stays in use here, and the preferences file is recreated if the keyset cannot be read.
 
