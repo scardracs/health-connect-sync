@@ -4,6 +4,8 @@ import android.content.Context
 import android.content.SharedPreferences
 import it.healthsync.app.domain.BackfillState
 import it.healthsync.app.domain.CompactPayloads
+import it.healthsync.app.domain.SendPause
+import it.healthsync.app.domain.SyncInterval
 import it.healthsync.app.domain.DEFAULT_AUTH_HEADER
 import it.healthsync.app.domain.SendPlan
 import it.healthsync.app.domain.StoredBackfill
@@ -82,11 +84,52 @@ class SettingsRepository(context: Context) {
         _counts.value = readCounts()
     }
 
-    fun gapSeconds(): Long = prefs.getLong(KEY_GAP, CompactPayloads.MIN_GAP_SECONDS)
-        .coerceAtLeast(CompactPayloads.MIN_GAP_SECONDS)
+    fun gapSeconds(): Long = SendPause.coerce(prefs.getLong(KEY_GAP, SendPause.DEFAULT_SECONDS))
 
     fun setGapSeconds(seconds: Long) {
-        prefs.edit().putLong(KEY_GAP, seconds.coerceAtLeast(CompactPayloads.MIN_GAP_SECONDS)).commit()
+        prefs.edit().putLong(KEY_GAP, SendPause.coerce(seconds)).commit()
+    }
+
+    fun wifiOnly(): Boolean = prefs.getBoolean(KEY_WIFI, false)
+
+    fun setWifiOnly(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_WIFI, enabled).commit()
+    }
+
+    fun chargingOnly(): Boolean = prefs.getBoolean(KEY_CHARGING, false)
+
+    fun setChargingOnly(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_CHARGING, enabled).commit()
+    }
+
+    fun intervalHours(): Long = SyncInterval.coerce(prefs.getLong(KEY_INTERVAL, SyncInterval.DEFAULT_HOURS))
+
+    fun setIntervalHours(hours: Long) {
+        prefs.edit().putLong(KEY_INTERVAL, SyncInterval.coerce(hours)).commit()
+    }
+
+    fun rangeStart(): String = prefs.getString(KEY_RANGE_START, "").orEmpty()
+
+    fun rangeEnd(): String = prefs.getString(KEY_RANGE_END, "").orEmpty()
+
+    fun setRange(startIso: String, endIso: String) {
+        prefs.edit()
+            .putString(KEY_RANGE_START, startIso.trim())
+            .putString(KEY_RANGE_END, endIso.trim())
+            .commit()
+    }
+
+    fun failureStreak(): Int = prefs.getInt(KEY_STREAK, 0)
+
+    /** Returns the streak after this failure. */
+    fun bumpFailureStreak(): Int {
+        val streak = prefs.getInt(KEY_STREAK, 0) + 1
+        prefs.edit().putInt(KEY_STREAK, streak).commit()
+        return streak
+    }
+
+    fun clearFailureStreak() {
+        prefs.edit().putInt(KEY_STREAK, 0).commit()
     }
 
     /** Empty means "first day that is not only calories". */
@@ -151,6 +194,7 @@ class SettingsRepository(context: Context) {
             .putLong(KEY_LAST_SUCCESS, windowEnd.toEpochMilli())
             .putString(KEY_MESSAGE, message)
             .putInt(KEY_HTTP, httpCode)
+            .putInt(KEY_STREAK, 0)
             .commit()
         _syncState.value = readSyncState()
     }
@@ -210,5 +254,11 @@ class SettingsRepository(context: Context) {
         private const val KEY_GAP = "gap_seconds"
         private const val KEY_START_DATE = "backfill_start_date"
         private const val KEY_FIRST_GRANT = "first_grant_epoch_ms"
+        private const val KEY_WIFI = "wifi_only"
+        private const val KEY_CHARGING = "charging_only"
+        private const val KEY_INTERVAL = "interval_hours"
+        private const val KEY_RANGE_START = "range_start"
+        private const val KEY_RANGE_END = "range_end"
+        private const val KEY_STREAK = "failure_streak"
     }
 }

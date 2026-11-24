@@ -12,7 +12,10 @@ class DailyKickWorker(
     override suspend fun doWork(): Result {
         val runner = SyncRunner.create(applicationContext)
         val plan = it.healthsync.app.data.SettingsRepository(applicationContext).plan()
-        if (plan != null && plan.finished) runner.armSync()
+        when {
+            plan == null -> runner.armInitial(manual = false)
+            plan.finished -> runner.armSync(manual = false)
+        }
         SyncScheduler.kick(applicationContext, replace = false)
         return Result.success()
     }

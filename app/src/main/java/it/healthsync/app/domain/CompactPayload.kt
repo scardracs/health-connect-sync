@@ -17,9 +17,12 @@ import kotlinx.serialization.json.Json
 @OptIn(ExperimentalSerializationApi::class)
 @Serializable
 data class WirePayload(
-    @EncodeDefault(EncodeDefault.Mode.ALWAYS) @kotlinx.serialization.SerialName("v") val version: Int = 3,
+    @EncodeDefault(EncodeDefault.Mode.ALWAYS) @kotlinx.serialization.SerialName("v") val version: Int = 4,
     @kotlinx.serialization.SerialName("k") val kind: String,
+    @kotlinx.serialization.SerialName("bid") val batchId: String,
     @kotlinx.serialization.SerialName("i") val index: Int,
+    @EncodeDefault(EncodeDefault.Mode.ALWAYS) @kotlinx.serialization.SerialName("n") val total: Int,
+    @EncodeDefault(EncodeDefault.Mode.ALWAYS) @kotlinx.serialization.SerialName("f") val finalFlag: Int,
     @kotlinx.serialization.SerialName("z") val zone: String,
     @kotlinx.serialization.SerialName("app") val app: String,
     @kotlinx.serialization.SerialName("t") val syncedAt: String,
@@ -88,9 +91,14 @@ data class WireBody(
 
 object CompactPayloads {
     const val MAX_BYTES = 3_500
-    const val MIN_GAP_SECONDS = 60L
+    const val MIN_GAP_SECONDS = 10L
+    const val DEFAULT_GAP_SECONDS = 60L
     const val KIND_BACKFILL = "b"
     const val KIND_INCREMENTAL = "i"
+    const val KIND_RANGE = "r"
+    /** Sizing budget for "n". A real total is never larger than this. */
+    private const val SIZING_TOTAL = 99_999
+    private const val SIZING_BATCH = "000000000000"
 
     private val json = Json {
         explicitNulls = false
@@ -143,13 +151,17 @@ object CompactPayloads {
     /** Backfill drops days whose only numbers are calorie estimates. */
     fun forBackfill(days: List<WireDay>): List<WireDay> = days.filterNot { it.isCalorieOnly() }
 
+    /**
+     * Splits [days] into webhook bodies. Every body names the same [batchId],
+     * its 1-based index, the total, and whether it is the last send (`f` = 1).
+     */
     fun pack(
         days: List<WireDay>,
         kind: String,
         zone: String,
         app: String,
         syncedAt: String,
-        startIndex: Int,
+        batchId: String,
     ): List<WireBody> {
         if (days.isEmpty()) return emptyList()
         val fitted = days.map { fit(it, kind, zone, app, syncedAt) }
@@ -167,19 +179,46 @@ object CompactPayloads {
                 current += day
             }
         }
+        val total = groups.size
         return groups.mapIndexed { offset, group ->
+            val index = offset + 1
+            val body = encode(
+                group,
+                kind,
+                zone,
+                app,
+                syncedAt,
+                index,
+                batchId = batchId,
+                total = total,
+                finalFlag = if (index == total) 1 else 0,
+            )
+            check(bytes(body) <= MAX_BYTES) { "Chunk $index is ${bytes(body)} bytes" }
             WireBody(
-                json = encode(group, kind, zone, app, syncedAt, startIndex + offset),
+                json = body,
                 firstDate = LocalDate.parse(group.first().date),
                 lastDate = LocalDate.parse(group.last().date),
             )
         }
     }
 
-    fun encode(days: List<WireDay>, kind: String, zone: String, app: String, syncedAt: String, index: Int): String {
+    fun encode(
+        days: List<WireDay>,
+        kind: String,
+        zone: String,
+        app: String,
+        syncedAt: String,
+        index: Int,
+        batchId: String = SIZING_BATCH,
+        total: Int = SIZING_TOTAL,
+        finalFlag: Int = 1,
+    ): String {
         val payload = WirePayload(
             kind = kind,
+            batchId = batchId,
             index = index,
+            total = total,
+            finalFlag = finalFlag,
             zone = zone,
             app = app,
             syncedAt = syncedAt,

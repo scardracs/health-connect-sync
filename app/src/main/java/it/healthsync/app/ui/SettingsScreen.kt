@@ -1,9 +1,11 @@
 package it.healthsync.app.ui
 
+import android.Manifest
 import android.content.Context
 import android.os.Build
 import android.os.PowerManager
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -57,6 +59,7 @@ import it.healthsync.app.AppLocales
 import it.healthsync.app.R
 import it.healthsync.app.data.OnboardingStore
 import it.healthsync.app.domain.AppLanguage
+import it.healthsync.app.domain.SendPause
 import it.healthsync.app.domain.Onboarding
 import it.healthsync.app.sync.SyncScheduler
 import it.healthsync.app.data.SyncStatus
@@ -77,6 +80,11 @@ fun SaluteApp(viewModel: SettingsViewModel) {
     var showOnboarding by remember { mutableStateOf(Onboarding.shouldShow(OnboardingStore.read(context))) }
     var ignoringBattery by remember { mutableStateOf(false) }
     val zone = remember { ZoneId.systemDefault() }
+
+    val notificationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
+    LaunchedEffect(Unit) {
+        if (Build.VERSION.SDK_INT >= 33) notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+    }
 
     val readPermissionLauncher = rememberLauncherForActivityResult(
         PermissionController.createRequestPermissionResultContract(),
@@ -347,6 +355,41 @@ private fun SettingsPage(
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
             )
+            val gapValue = viewModel.gapSeconds.value.toLongOrNull()
+            if (gapValue != null && SendPause.warnsRateLimit(gapValue)) {
+                Text(stringResource(R.string.gap_fast_note), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+            }
+            Spacer(Modifier.height(8.dp))
+            OutlinedTextField(
+                value = viewModel.rangeStart.value,
+                onValueChange = { viewModel.rangeStart.value = it },
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text(stringResource(R.string.range_start)) },
+                singleLine = true,
+            )
+            Spacer(Modifier.height(8.dp))
+            OutlinedTextField(
+                value = viewModel.rangeEnd.value,
+                onValueChange = { viewModel.rangeEnd.value = it },
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text(stringResource(R.string.range_end)) },
+                singleLine = true,
+            )
+            Spacer(Modifier.height(8.dp))
+            OutlinedButton(onClick = viewModel::sendRange, modifier = Modifier.fillMaxWidth()) {
+                Text(stringResource(R.string.send_range))
+            }
+            Spacer(Modifier.height(8.dp))
+            DailyChoiceRow(stringResource(R.string.wifi_only), viewModel.wifiOnly.value) { viewModel.wifiOnly.value = it }
+            DailyChoiceRow(stringResource(R.string.charging_only), viewModel.chargingOnly.value) { viewModel.chargingOnly.value = it }
+            OutlinedTextField(
+                value = viewModel.intervalHours.value,
+                onValueChange = { viewModel.intervalHours.value = it.filter { ch -> ch.isDigit() } },
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text(stringResource(R.string.interval_hours)) },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+            )
             Spacer(Modifier.height(8.dp))
             Button(onClick = viewModel::save, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.save_settings)) }
         }
@@ -523,6 +566,14 @@ private fun fieldError(code: String?): String? {
         else -> return code
     }
     return stringResource(res)
+}
+
+@Composable
+private fun DailyChoiceRow(label: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Checkbox(checked = checked, onCheckedChange = onChange)
+        Text(label, modifier = Modifier.padding(start = 8.dp))
+    }
 }
 
 @Composable

@@ -1,3 +1,21 @@
+# Salute Sync v2.0.0
+
+## English
+
+Settings can send one date range, limit the automatic sync to Wi-Fi and to charging, and pick how many hours pass between automatic runs. The pause between sends still defaults to 60 seconds and can go down to 10; the screen warns that a shorter pause can be dropped by the receiver. After three failed attempts in a row the app posts a notification. One failure stays quiet.
+
+Webhook bodies are schema version 4. The app collects the days first, then sends chunks that stay under 3,500 bytes. Each body has `bid` (batch id), `i` (index), `n` (total), and `f` (`1` only on the last send, including a batch of one). Dates on screen stay DD-MM-YYYY. Dates inside the JSON stay ISO.
+
+`versionCode` 9, same sideload key. Attach `salute-sync-2.0.0.apk`.
+
+## Italiano
+
+Impostazioni può inviare un intervallo di date, limitare la sync automatica al Wi-Fi e alla ricarica, e scegliere ogni quante ore parte. La pausa tra gli invii resta di 60 secondi e può scendere a 10; lo schermo avvisa che una pausa più breve può essere scartata dal ricevitore. Dopo tre tentativi falliti di seguito l'app mostra una notifica. Un solo errore resta in silenzio.
+
+I corpi webhook sono schema versione 4. L'app raccoglie prima i giorni, poi invia blocchi sotto i 3.500 byte. Ogni corpo ha `bid` (id del gruppo), `i` (indice), `n` (totale) e `f` (`1` solo sull'ultimo invio, anche se il gruppo è uno solo). Le date a schermo restano GG-MM-AAAA. Le date nel JSON restano ISO.
+
+`versionCode` 9, stessa chiave di sideload. Allegare `salute-sync-2.0.0.apk`.
+
 # Salute Sync v1.4.0
 
 ## English

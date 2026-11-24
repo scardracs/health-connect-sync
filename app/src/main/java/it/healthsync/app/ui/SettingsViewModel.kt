@@ -8,7 +8,10 @@ import it.healthsync.app.BuildConfig
 import it.healthsync.app.data.SettingsRepository
 import it.healthsync.app.data.SyncState
 import it.healthsync.app.domain.BackfillState
+import it.healthsync.app.domain.DateRangePlan
 import it.healthsync.app.domain.ItalianDates
+import it.healthsync.app.domain.SendPause
+import it.healthsync.app.domain.SyncInterval
 import it.healthsync.app.domain.SendPlan
 import it.healthsync.app.sync.SyncScheduler
 import it.healthsync.app.domain.DEFAULT_AUTH_HEADER
@@ -78,6 +81,11 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
         ItalianDates.fromStoredDate(settings.backfillStartDate()),
     )
     var gapSeconds = androidx.compose.runtime.mutableStateOf(settings.gapSeconds().toString())
+    var rangeStart = androidx.compose.runtime.mutableStateOf(ItalianDates.fromStoredDate(settings.rangeStart()))
+    var rangeEnd = androidx.compose.runtime.mutableStateOf(ItalianDates.fromStoredDate(settings.rangeEnd()))
+    var wifiOnly = androidx.compose.runtime.mutableStateOf(settings.wifiOnly())
+    var chargingOnly = androidx.compose.runtime.mutableStateOf(settings.chargingOnly())
+    var intervalHours = androidx.compose.runtime.mutableStateOf(settings.intervalHours().toString())
     var validation = androidx.compose.runtime.mutableStateOf(SettingsValidation(null, null, null))
     var health = androidx.compose.runtime.mutableStateOf(HealthUi())
     var syncing = androidx.compose.runtime.mutableStateOf(false)
@@ -123,11 +131,41 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
         validation.value = result
         if (!result.ok) return
         if (!storeStartDate()) return
+        if (!storeDelivery()) return
         settings.saveWebhook(url.value, headerName.value, headerValue.value)
-        settings.setGapSeconds(gapSeconds.value.toLongOrNull() ?: 60L)
-        gapSeconds.value = settings.gapSeconds().toString()
         headerName.value = settings.webhook().headerName
+        SyncScheduler.ensureDaily(getApplication(), update = true)
         banner.value = getApplication<Application>().getString(it.healthsync.app.R.string.saved)
+    }
+
+    fun sendRange() {
+        val result = validateWebhookSettings(url.value, headerName.value, headerValue.value)
+        validation.value = result
+        if (!result.ok) {
+            banner.value = getApplication<Application>().getString(it.healthsync.app.R.string.check_webhook)
+            return
+        }
+        if (!storeStartDate() || !storeDelivery()) return
+        val startIso = ItalianDates.toStoredDate(rangeStart.value)
+        val endIso = ItalianDates.toStoredDate(rangeEnd.value)
+        if (startIso.isNullOrEmpty() || endIso.isNullOrEmpty()) {
+            banner.value = getApplication<Application>().getString(it.healthsync.app.R.string.range_invalid)
+            return
+        }
+        val range = DateRangePlan.parse(startIso, endIso)
+        if (range == null) {
+            banner.value = getApplication<Application>().getString(it.healthsync.app.R.string.range_invalid)
+            return
+        }
+        settings.saveWebhook(url.value, headerName.value, headerValue.value)
+        settings.setRange(startIso, endIso)
+        runner.armRange(range.start, range.endInclusive)
+        SyncScheduler.kick(getApplication(), replace = true)
+        banner.value = getApplication<Application>().getString(
+            it.healthsync.app.R.string.range_started,
+            ItalianDates.format(range.start),
+            ItalianDates.format(range.endInclusive),
+        )
     }
 
     fun reimport() = launchQueue(reset = true)
@@ -141,10 +179,8 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
             banner.value = getApplication<Application>().getString(it.healthsync.app.R.string.check_webhook)
             return
         }
-        if (!storeStartDate()) return
+        if (!storeStartDate() || !storeDelivery()) return
         settings.saveWebhook(url.value, headerName.value, headerValue.value)
-        settings.setGapSeconds(gapSeconds.value.toLongOrNull() ?: 60L)
-        gapSeconds.value = settings.gapSeconds().toString()
         headerName.value = settings.webhook().headerName
         val current = settings.plan()
         if (reset) {
@@ -156,7 +192,7 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
             )
         } else {
             if (current == null || current.finished) {
-                if (current != null) runner.armSync()
+                if (current != null) runner.armSync(manual = true) else runner.armInitial(manual = true)
             }
             SyncScheduler.kick(getApplication(), replace = false)
             val res = if (current == null) {
@@ -170,6 +206,16 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
 
     fun consumeBanner() {
         banner.value = null
+    }
+
+    private fun storeDelivery(): Boolean {
+        settings.setGapSeconds(SendPause.coerce(gapSeconds.value.toLongOrNull()))
+        gapSeconds.value = settings.gapSeconds().toString()
+        settings.setWifiOnly(wifiOnly.value)
+        settings.setChargingOnly(chargingOnly.value)
+        settings.setIntervalHours(SyncInterval.coerce(intervalHours.value.toLongOrNull()))
+        intervalHours.value = settings.intervalHours().toString()
+        return true
     }
 
     private fun storeStartDate(): Boolean {

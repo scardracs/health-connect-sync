@@ -13,7 +13,7 @@ The phone UI defaults to Italian and can be switched to English in Settings, and
 
 ## Install on a phone
 
-The sideload APK is signed (see below). The current release asset is `salute-sync-1.4.0.apk`, published on the GitHub release `v1.4.0` (`https://github.com/scardracs/health-connect-sync/releases/download/v1.4.0/salute-sync-1.4.0.apk`). Older tags use the same pattern: `salute-sync-<version>.apk`.
+The sideload APK is signed (see below). The current release asset is `salute-sync-2.0.0.apk`, published on the GitHub release `v2.0.0` (`https://github.com/scardracs/health-connect-sync/releases/download/v2.0.0/salute-sync-2.0.0.apk`). Older tags use the same pattern: `salute-sync-<version>.apk`.
 
 The main screen shows sync status, last sync, per-type counts, **Sync now**, and **Reimport history**. If the webhook or Health Connect read permissions are missing, a short notice links to Settings. Webhook URL, header name, header value (masked until shown), language, morning sync, and Health Connect permissions are on the Settings screen. The first time the app opens, including after an update from an older version, a dialog asks for the language and offers the Health Connect setup. **Skip** closes it and does not turn off the morning sync. It does not appear again.
 
@@ -27,7 +27,7 @@ The main screen shows sync status, last sync, per-type counts, **Sync now**, and
 8. If the phone supports it, in Settings tap **Allow background read** and **Allow history read**. Without background read, the 06:00 sync cannot read while the screen is off. **Sync now** still works with the app open. Without history read, Health Connect only allows data from 30 days before the first permission grant. The screen says so.
 9. In Settings, paste the webhook URL (`https://` is recommended; `http://` is allowed, for example on a local network) and the header value. The header name defaults to `Authorization` and can be changed. The key stays masked until you tap **Show key**.
 10. Tap **Save settings**, then on the main screen **Sync now**.
-11. The main screen shows the last success and the last attempt as DD-MM-YYYY HH:mm. The automatic sync is a WorkManager job every 24 hours, aimed at 06:00 in the phone's time zone (in Italy, `Europe/Rome`). Leave **Sync every morning around 06:00** on, in the welcome dialog or in Settings. Android may delay it while battery saving is on. **Don't optimize battery** on the main screen opens the system request.
+11. The main screen shows the last success and the last attempt as DD-MM-YYYY HH:mm. In Settings, **Send this range** resends the days between **From** and **To** without a full history import. **Wi-Fi only** and **Only while charging** apply to the automatic sync. **Automatic sync every** sets the interval in hours (default 24, which still aims at 06:00 in the phone's time zone). Leave **Sync every morning around 06:00** on if you want that job. Android may delay it while battery saving is on. **Don't optimize battery** on the main screen opens the system request.
 
 To update the app, install a newer APK signed with the same key over this one. Uninstalling clears the URL, the key, and the time of the last sync.
 
@@ -37,9 +37,9 @@ To update the app, install a newer APK signed with the same key over this one. U
 
 - `Content-Type: application/json; charset=utf-8`
 - The header name and value you configured (default name `Authorization`)
-- `User-Agent: SaluteSync/1.4.0`
+- `User-Agent: SaluteSync/2.0.0`
 
-Every POST body is at most **3,500 bytes**. Requests are sent **one at a time**, with at least **60 seconds** between them (the pause can be raised in the app, not lowered). WorkManager keeps the queue going in the background. Progress is stored on the phone, so a failure resumes at the next unsent day.
+Every POST body is at most **3,500 bytes**. The app reads the whole range first, then sends the chunks **one at a time**. The pause defaults to **60 seconds** and can be set down to 10; Settings warns that a shorter pause can be dropped by the receiver. WorkManager keeps the queue going in the background, including a Wi-Fi-only and charging-only option for the automatic run. The automatic run defaults to every 24 hours, aimed at 06:00, and can be set from 1 to 168 hours. A failure resumes at the next unsent chunk of the same batch. After three failed attempts in a row the phone shows a notification. One failure does not.
 
 The first sync imports history. By default it starts at the earliest day that has something other than calorie estimates, and it does not POST days that contain only calories. You can set an explicit start date on the Settings screen; the field is shown as DD-MM-YYYY and stored as `yyyy-MM-dd`. **Reimport history** clears the cursor and starts again. Later mornings send only the new days (`k` is `i` instead of `b`).
 
@@ -55,19 +55,38 @@ If Health Connect rejects a window that starts more than 30 days before the perm
 
 On a network error, or HTTP 408, 429, or 5xx, WorkManager retries with exponential backoff (minimum 15 minutes, up to 5 attempts in that cycle). A wrong URL or key (other 4xx) is not retried in a tight loop. The periodic sync stays scheduled either way.
 
-## JSON schema (version 3)
+## JSON schema (version 4)
 
-Null fields are omitted. Numbers are integers except weights, temperatures, glucose, respiratory rate, and VO2, which keep one or two decimals. Each body is UTF-8 and at most 3500 bytes. `k` is `b` for history and `i` for the daily sync. `i` is the 1-based number of this POST in the current run.
+Null fields are omitted. Numbers are integers except weights, temperatures, glucose, respiratory rate, and VO2, which keep one or two decimals. Each body is UTF-8 and at most 3500 bytes. Dates inside the JSON stay ISO `yyyy-MM-dd`. The app collects every day for the operation first, then sends the chunks. `k` is `b` for history, `i` for the scheduled or manual incremental sync, and `r` for a date range chosen in Settings.
+
+`bid` is the same on every send of one operation. `i` is the 1-based index, `n` is how many sends are in the batch, and `f` is `1` only on the last send (`0` on the others). A sync that fits in one POST has `i` 1, `n` 1, and `f` 1. The receiver can store earlier sends and analyse the batch when `f` is 1.
+
+Middle send (`i` 2 of 4):
 
 ```json
-{"v":3,"k":"b","i":1,"z":"Europe/Rome","app":"1.2.0","t":"2026-11-18T16:00:00+01:00","a":"2024-06-01","b":"2024-06-01","d":[{"d":"2024-06-01","st":8432,"dm":6120,"ak":320,"tk":2100,"hr":[52,72,145],"rh":58,"sl":[{"m":480,"s":"06-01 23:00","e":"06-02 07:00","g":{"d":90,"l":220,"r":80}}],"wt":74.2,"bf":18.5,"ex":[{"y":"run","m":45,"k":420}]}]}
+{"v":4,"k":"b","bid":"0192ab34cd56","i":2,"n":4,"f":0,"z":"Europe/Rome","app":"2.0.0","t":"2026-11-24T06:00:00+01:00","a":"2024-01-08","b":"2024-01-14","d":[{"d":"2024-01-08","st":8100}]}
+```
+
+Final send of the same batch:
+
+```json
+{"v":4,"k":"b","bid":"0192ab34cd56","i":4,"n":4,"f":1,"z":"Europe/Rome","app":"2.0.0","t":"2026-11-24T06:00:00+01:00","a":"2024-01-22","b":"2024-01-28","d":[{"d":"2024-01-22","st":7900}]}
+```
+
+One day, one POST:
+
+```json
+{"v":4,"k":"i","bid":"0192ab34cd56","i":1,"n":1,"f":1,"z":"Europe/Rome","app":"2.0.0","t":"2026-11-18T16:00:00+01:00","a":"2024-06-01","b":"2024-06-01","d":[{"d":"2024-06-01","st":8432,"dm":6120,"ak":320,"tk":2100,"hr":[52,72,145],"rh":58,"sl":[{"m":480,"s":"06-01 23:00","e":"06-02 07:00","g":{"d":90,"l":220,"r":80}}],"wt":74.2,"bf":18.5,"ex":[{"y":"run","m":45,"k":420}]}]}
 ```
 
 | Key | Meaning |
 | --- | --- |
-| `v` | Schema version, `3`. |
-| `k` | `b` backfill, `i` incremental. |
-| `i` | 1-based POST index in this run. |
+| `v` | Schema version, `4`. |
+| `k` | `b` backfill, `i` incremental, `r` date range. |
+| `bid` | Batch id, identical on every send of this operation. |
+| `i` | 1-based index of this POST inside the batch. |
+| `n` | Total POSTs in the batch. |
+| `f` | `1` on the last POST, `0` on every earlier POST. |
 | `z` | Phone time zone id. |
 | `app` | App version name. |
 | `t` | When this body was built. |

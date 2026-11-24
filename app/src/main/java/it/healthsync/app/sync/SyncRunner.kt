@@ -6,10 +6,12 @@ import it.healthsync.app.BuildConfig
 import it.healthsync.app.data.SettingsRepository
 import it.healthsync.app.R
 import it.healthsync.app.domain.CompactPayloads
+import it.healthsync.app.domain.FailureStreak
 import it.healthsync.app.domain.FieldError
 import it.healthsync.app.domain.HistoryRange
 import it.healthsync.app.domain.ItalianDates
 import it.healthsync.app.domain.SendPlan
+import it.healthsync.app.domain.WireDay
 import it.healthsync.app.domain.validateWebhookSettings
 import it.healthsync.app.health.HealthConnectGateway
 import it.healthsync.app.health.HealthPermissions
@@ -48,18 +50,37 @@ class SyncRunner(
     private val now: () -> Instant = Instant::now,
     private val zone: () -> ZoneId = { ZoneId.systemDefault() },
 ) {
+    /** First run: history scan. Later runs call [armSync]. */
+    fun armInitial(manual: Boolean) {
+        val existing = settings.plan()
+        if (existing != null && !existing.finished) return
+        val attemptAt = now()
+        BatchStore(context).clear()
+        settings.savePlan(
+            SendPlan(
+                mode = SendPlan.BACKFILL,
+                phase = SendPlan.SCAN,
+                cursorEpochMs = attemptAt.toEpochMilli(),
+                endEpochMs = attemptAt.toEpochMilli(),
+                manual = manual,
+            ),
+        )
+    }
+
     /** Resume an in-progress export, or start today's incremental window. */
-    fun armSync() {
+    fun armSync(manual: Boolean) {
         val existing = settings.plan()
         if (existing != null && !existing.finished) return
         val attemptAt = now()
         val start = settings.syncState.value.lastSuccess ?: attemptAt.minus(7, ChronoUnit.DAYS)
+        BatchStore(context).clear()
         settings.savePlan(
             SendPlan(
                 mode = SendPlan.INCREMENTAL,
-                phase = SendPlan.SEND,
+                phase = SendPlan.PREPARE,
                 cursorEpochMs = start.toEpochMilli(),
                 endEpochMs = attemptAt.toEpochMilli(),
+                manual = manual,
             ),
         )
     }
@@ -67,15 +88,33 @@ class SyncRunner(
     /** Drop progress and import history again from the configured start date. */
     fun armReimport() {
         val attemptAt = now()
-        val historyGranted = false
         settings.clearPlan()
+        BatchStore(context).clear()
         settings.savePlan(
             SendPlan(
                 mode = SendPlan.BACKFILL,
                 phase = SendPlan.SCAN,
                 cursorEpochMs = attemptAt.toEpochMilli(),
                 endEpochMs = attemptAt.toEpochMilli(),
-                historyLimited = !historyGranted,
+                manual = true,
+            ),
+        )
+    }
+
+    /** Send one inclusive local range, including calorie-only days. */
+    fun armRange(start: java.time.LocalDate, endInclusive: java.time.LocalDate) {
+        val zoneId = zone()
+        val startInstant = start.atStartOfDay(zoneId).toInstant()
+        val endInstant = endInclusive.plusDays(1).atStartOfDay(zoneId).toInstant()
+        settings.clearPlan()
+        BatchStore(context).clear()
+        settings.savePlan(
+            SendPlan(
+                mode = SendPlan.RANGE,
+                phase = SendPlan.PREPARE,
+                cursorEpochMs = startInstant.toEpochMilli(),
+                endEpochMs = endInstant.toEpochMilli(),
+                manual = true,
             ),
         )
     }
@@ -97,7 +136,7 @@ class SyncRunner(
         val validation = validateWebhookSettings(config.url, config.headerName, config.headerValue)
         if (!validation.ok) {
             val failure = SyncOutcome.Failure(explain(validation.urlError ?: validation.headerNameError ?: validation.headerValueError), retryable = false)
-            settings.markFailure(attemptAt, failure.message, null)
+            recordFailure(attemptAt, failure.message, null)
             return StepResult.Failed(failure)
         }
         val zoneId = zone()
@@ -117,14 +156,18 @@ class SyncRunner(
             }
         }
         return try {
-            sendWindow(plan, attemptAt, zoneId, config.url, config.headerName, config.headerValue, origin)
+            if (plan.phase == SendPlan.PREPARE || plan.batchTotal == 0) {
+                prepare(plan, attemptAt, zoneId)
+            } else {
+                sendChunk(plan, attemptAt, config.url, config.headerName, config.headerValue, origin)
+            }
         } catch (error: Exception) {
             Log.e(TAG, "step failed: ${error.javaClass.simpleName}")
             val failure = SyncOutcome.Failure(
                 withRetryHint(context.getString(R.string.msg_unexpected), retryable = true, origin),
                 retryable = true,
             )
-            settings.markFailure(attemptAt, failure.message, null)
+            recordFailure(attemptAt, failure.message, null)
             StepResult.Failed(failure)
         }
     }
@@ -147,7 +190,7 @@ class SyncRunner(
         }
         val start = discovered.atStartOfDay(zoneId).toInstant().let { if (it.isBefore(horizonStart)) horizonStart else it }
         return plan.copy(
-            phase = SendPlan.SEND,
+            phase = SendPlan.PREPARE,
             cursorEpochMs = start.toEpochMilli(),
             endEpochMs = now.toEpochMilli(),
             historyLimited = !historyGranted,
@@ -155,104 +198,109 @@ class SyncRunner(
         )
     }
 
-    private suspend fun sendWindow(
-        plan: SendPlan,
-        now: Instant,
-        zoneId: ZoneId,
-        url: String,
-        headerName: String,
-        headerValue: String,
-        origin: SyncOrigin,
-    ): StepResult {
+    private suspend fun prepare(plan: SendPlan, now: Instant, zoneId: ZoneId): StepResult {
         var cursor = Instant.ofEpochMilli(plan.cursorEpochMs)
         val end = Instant.ofEpochMilli(plan.endEpochMs)
-        var sent = plan.sent
-        var hops = 0
-        while (cursor.isBefore(end) && hops < 12) {
+        val days = mutableListOf<WireDay>()
+        var guard = 0
+        while (cursor.isBefore(end) && guard < 2_000) {
             val windowEnd = minOf(cursor.plus(7, ChronoUnit.DAYS), end)
             when (val read = gateway.read(cursor, windowEnd, zoneId, plan.historyLimited, allowHistoryClamp = false)) {
                 is ReadOutcome.Unavailable -> return failStep(now, read.message, false)
                 is ReadOutcome.PermissionDenied -> return failStep(now, read.message, false)
                 is ReadOutcome.Ok -> {
                     settings.saveCounts(read.snapshot.counts)
-                    Log.i(TAG, "counts " + read.snapshot.counts.entries.joinToString(" ") { "${it.key}=${it.value}" })
-                    var days = CompactPayloads.daysFrom(read.snapshot)
-                    if (plan.mode == SendPlan.BACKFILL) days = CompactPayloads.forBackfill(days)
-                    if (days.isEmpty()) {
-                        cursor = windowEnd
-                        hops += 1
-                        settings.savePlan(plan.copy(cursorEpochMs = cursor.toEpochMilli()))
-                        continue
-                    }
-                    val syncedAt = DateTimeFormatter.ISO_OFFSET_DATE_TIME.format(
-                        now.atZone(zoneId).truncatedTo(ChronoUnit.SECONDS),
-                    )
-                    val bodies = CompactPayloads.pack(
-                        days = days,
-                        kind = if (plan.mode == SendPlan.BACKFILL) CompactPayloads.KIND_BACKFILL else CompactPayloads.KIND_INCREMENTAL,
-                        zone = zoneId.id,
-                        app = appVersion,
-                        syncedAt = syncedAt,
-                        startIndex = sent + 1,
-                    )
-                    val body = bodies.first()
-                    check(CompactPayloads.bytes(body.json) <= CompactPayloads.MAX_BYTES)
-                    when (val posted = poster.post(url, headerName, headerValue, body.json)) {
-                        is PostResult.Ok -> {
-                            sent += 1
-                            val nextDay = body.lastDate.plusDays(1).atStartOfDay(zoneId).toInstant()
-                            val advanced = if (nextDay.isAfter(cursor)) nextDay else windowEnd
-                            val finished = !advanced.isBefore(end)
-                            val updated = plan.copy(cursorEpochMs = advanced.toEpochMilli(), sent = sent, finished = finished)
-                            settings.savePlan(updated)
-                            val progress = context.getString(
-                                R.string.msg_sent_until,
-                                sent,
-                                ItalianDates.format(body.lastDate),
-                            )
-                            settings.noteProgress(now, progress)
-                            return if (finished) {
-                                settings.markSuccess(
-                                    now,
-                                    end,
-                                    context.getString(R.string.msg_send_complete, sent),
-                                    posted.code,
-                                )
-                                StepResult.Finished
-                            } else {
-                                StepResult.Posted(settings.gapSeconds())
-                            }
-                        }
-                        is PostResult.HttpError -> {
-                            val message = context.getString(R.string.msg_http, posted.code)
-                            return failStep(now, withRetryHint(message, posted.retryable, origin), posted.retryable, posted.code)
-                        }
-                        is PostResult.NetworkError -> {
-                            return failStep(
-                                now,
-                                withRetryHint(context.getString(R.string.msg_network), true, origin),
-                                true,
-                            )
-                        }
-                    }
+                    var found = CompactPayloads.daysFrom(read.snapshot)
+                    if (plan.mode == SendPlan.BACKFILL) found = CompactPayloads.forBackfill(found)
+                    days += found
+                    cursor = windowEnd
                 }
             }
+            guard += 1
         }
-        val finished = !cursor.isBefore(end)
-        settings.savePlan(plan.copy(cursorEpochMs = cursor.toEpochMilli(), finished = finished))
-        return if (finished) {
+        val uniqueDays = days.associateBy { it.date }.values.sortedBy { it.date }
+        if (uniqueDays.isEmpty()) {
+            settings.savePlan(plan.copy(finished = true, phase = SendPlan.SEND))
             settings.markSuccess(now, end, context.getString(R.string.msg_nothing_left), 0)
-            StepResult.Finished
-        } else {
-            val shown = ItalianDates.format(cursor.atZone(zoneId).toLocalDate())
-            settings.noteProgress(now, context.getString(R.string.msg_skip_until, shown))
-            StepResult.ScanMore(5)
+            return StepResult.Finished
+        }
+        val batchId = now.toEpochMilli().toString(16).padStart(12, '0').takeLast(12)
+        val kind = when (plan.mode) {
+            SendPlan.BACKFILL -> CompactPayloads.KIND_BACKFILL
+            SendPlan.RANGE -> CompactPayloads.KIND_RANGE
+            else -> CompactPayloads.KIND_INCREMENTAL
+        }
+        val syncedAt = DateTimeFormatter.ISO_OFFSET_DATE_TIME.format(
+            now.atZone(zoneId).truncatedTo(ChronoUnit.SECONDS),
+        )
+        val bodies = CompactPayloads.pack(uniqueDays, kind, zoneId.id, appVersion, syncedAt, batchId)
+        BatchStore(context).replace(bodies.map { it.json })
+        val ready = plan.copy(
+            phase = SendPlan.SEND,
+            batchId = batchId,
+            batchTotal = bodies.size,
+            nextChunk = 1,
+            sent = 0,
+            cursorEpochMs = end.toEpochMilli(),
+        )
+        settings.savePlan(ready)
+        settings.noteProgress(now, context.getString(R.string.msg_batch_ready, bodies.size))
+        return StepResult.ScanMore(1)
+    }
+
+    private suspend fun sendChunk(
+        plan: SendPlan,
+        now: Instant,
+        url: String,
+        headerName: String,
+        headerValue: String,
+        origin: SyncOrigin,
+    ): StepResult {
+        val json = BatchStore(context).read(plan.nextChunk)
+            ?: return failStep(now, context.getString(R.string.msg_unexpected), true)
+        check(CompactPayloads.bytes(json) <= CompactPayloads.MAX_BYTES)
+        return when (val posted = poster.post(url, headerName, headerValue, json)) {
+            is PostResult.Ok -> {
+                val done = plan.nextChunk >= plan.batchTotal
+                if (done) {
+                    BatchStore(context).clear()
+                    settings.savePlan(plan.copy(sent = plan.sent + 1, finished = true))
+                    settings.markSuccess(
+                        now,
+                        Instant.ofEpochMilli(plan.endEpochMs),
+                        context.getString(R.string.msg_send_complete, plan.batchTotal),
+                        posted.code,
+                    )
+                    StepResult.Finished
+                } else {
+                    val updated = plan.copy(nextChunk = plan.nextChunk + 1, sent = plan.sent + 1)
+                    settings.savePlan(updated)
+                    settings.noteProgress(
+                        now,
+                        context.getString(R.string.msg_batch_progress, updated.sent, plan.batchTotal),
+                    )
+                    StepResult.Posted(settings.gapSeconds())
+                }
+            }
+            is PostResult.HttpError -> {
+                val message = context.getString(R.string.msg_http, posted.code)
+                failStep(now, withRetryHint(message, posted.retryable, origin), posted.retryable, posted.code)
+            }
+            is PostResult.NetworkError -> {
+                failStep(now, withRetryHint(context.getString(R.string.msg_network), true, origin), true)
+            }
         }
     }
 
     private fun failStep(now: Instant, message: String, retryable: Boolean, httpCode: Int? = null): StepResult {
-        settings.markFailure(now, message, httpCode)
+        recordFailure(now, message, httpCode)
         return StepResult.Failed(SyncOutcome.Failure(message, retryable, httpCode))
+    }
+
+    private fun recordFailure(now: Instant, message: String, httpCode: Int?) {
+        settings.markFailure(now, message, httpCode)
+        val streak = settings.bumpFailureStreak()
+        if (FailureStreak.shouldNotify(streak)) SyncNotifier.showRepeatedFailure(context, streak)
     }
 
     private fun planMessage(plan: SendPlan): String {

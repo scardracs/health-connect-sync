@@ -57,11 +57,13 @@ class CompactPayloadTest {
             vo2 = 46.2,
             nutrition = listOf(2200, 120, 240, 70),
         )
-        val bodies = CompactPayloads.pack(listOf(fat), CompactPayloads.KIND_BACKFILL, "Europe/Rome", "1.2.0", "2026-11-18T16:00:00+01:00", 1)
+        val bodies = CompactPayloads.pack(listOf(fat), CompactPayloads.KIND_BACKFILL, "Europe/Rome", "1.2.0", "2026-11-18T16:00:00+01:00", "abc123abc123")
         assertEquals(1, bodies.size)
         assertTrue(CompactPayloads.bytes(bodies.single().json) <= CompactPayloads.MAX_BYTES)
-        assertTrue(bodies.single().json.contains("\"v\":3"))
+        assertTrue(bodies.single().json.contains("\"v\":4"))
         assertTrue(bodies.single().json.contains("\"k\":\"b\""))
+        assertTrue(bodies.single().json.contains("\"n\":1"))
+        assertTrue(bodies.single().json.contains("\"f\":1"))
     }
 
     @Test
@@ -80,10 +82,14 @@ class CompactPayloadTest {
                 exercise = listOf(WireExercise("run", 40, 380), WireExercise("walk", 25, 120)),
             )
         }
-        val bodies = CompactPayloads.pack(days, CompactPayloads.KIND_BACKFILL, "Europe/Rome", "1.2.0", "2026-11-18T16:00:00+01:00", 7)
+        val bodies = CompactPayloads.pack(days, CompactPayloads.KIND_BACKFILL, "Europe/Rome", "1.2.0", "2026-11-18T16:00:00+01:00", "abc123abc123")
         assertTrue(bodies.size > 1)
         assertTrue(bodies.all { CompactPayloads.bytes(it.json) <= CompactPayloads.MAX_BYTES })
-        assertEquals(7, bodies.first().json.substringAfter("\"i\":").substringBefore(",").toInt())
+        assertEquals(1, bodies.first().json.substringAfter("\"i\":").substringBefore(",").toInt())
+        assertTrue(bodies.last().json.contains("\"f\":1"))
+        assertTrue(bodies.first().json.contains("\"f\":0"))
+        assertTrue(bodies.all { it.json.contains("\"n\":${bodies.size}") })
+        assertTrue(bodies.all { it.json.contains("\"bid\":\"abc123abc123\"") })
         assertEquals(days.first().date, bodies.first().firstDate.toString())
         assertEquals(days.last().date, bodies.last().lastDate.toString())
     }
@@ -150,7 +156,7 @@ class CompactPayloadTest {
         assertEquals(45, day.exercise.single().minutes)
         assertEquals(480, day.sleep!!.single().minutes)
         assertEquals(90, day.sleep.single().stages!!["d"])
-        val body = CompactPayloads.pack(listOf(day), CompactPayloads.KIND_INCREMENTAL, "Europe/Rome", "1.2.0", "2026-01-17T06:00:00+01:00", 1).single()
+        val body = CompactPayloads.pack(listOf(day), CompactPayloads.KIND_INCREMENTAL, "Europe/Rome", "1.2.0", "2026-01-17T06:00:00+01:00", "abc123abc123").single()
         assertTrue(CompactPayloads.bytes(body.json) <= CompactPayloads.MAX_BYTES)
         assertTrue(body.json.contains("\"st\":8432"))
         assertTrue(body.json.contains("2026-01-16"))
